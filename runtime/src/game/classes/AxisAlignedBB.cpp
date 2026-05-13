@@ -38,12 +38,12 @@ AxisAlignedBB_t AxisAlignedBB::GetNativeBoundingBox(JNIEnv* env) {
     try {
         if (minXField && minYField && minZField && maxXField && maxYField && maxZField) {
             result = AxisAlignedBB_t{
-                static_cast<float>(minXField->GetDoubleField(env, reinterpret_cast<jobject>(this))),
-                static_cast<float>(minYField->GetDoubleField(env, reinterpret_cast<jobject>(this))),
-                static_cast<float>(minZField->GetDoubleField(env, reinterpret_cast<jobject>(this))),
-                static_cast<float>(maxXField->GetDoubleField(env, reinterpret_cast<jobject>(this))),
-                static_cast<float>(maxYField->GetDoubleField(env, reinterpret_cast<jobject>(this))),
-                static_cast<float>(maxZField->GetDoubleField(env, reinterpret_cast<jobject>(this)))
+                minXField->GetDoubleField(env, reinterpret_cast<jobject>(this)),
+                minYField->GetDoubleField(env, reinterpret_cast<jobject>(this)),
+                minZField->GetDoubleField(env, reinterpret_cast<jobject>(this)),
+                maxXField->GetDoubleField(env, reinterpret_cast<jobject>(this)),
+                maxYField->GetDoubleField(env, reinterpret_cast<jobject>(this)),
+                maxZField->GetDoubleField(env, reinterpret_cast<jobject>(this))
             };
         }
     } catch (...) {

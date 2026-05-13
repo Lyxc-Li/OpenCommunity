@@ -27,6 +27,27 @@ static std::unordered_map<std::string, OriginalEntityData> originalData;
 static std::mutex originalDataMutex;
 
 namespace {
+    AxisAlignedBB_t BuildBoundingBoxAtPosition(const Vec3D& position, float width, float height) {
+        const double safeWidth = std::isfinite(width) && width > 0.0f ? static_cast<double>(width) : 0.6;
+        const double safeHeight = std::isfinite(height) && height > 0.0f ? static_cast<double>(height) : 1.8;
+        const double halfWidth = safeWidth * 0.5;
+
+        return AxisAlignedBB_t{
+            position.x - halfWidth,
+            position.y,
+            position.z - halfWidth,
+            position.x + halfWidth,
+            position.y + safeHeight,
+            position.z + halfWidth
+        };
+    }
+
+    bool IsFinitePosition(const Vec3D& position) {
+        return std::isfinite(position.x) &&
+            std::isfinite(position.y) &&
+            std::isfinite(position.z);
+    }
+
     std::string StripFormatting(std::string text) {
         std::string clean;
         clean.reserve(text.size());
@@ -1025,7 +1046,11 @@ void Player::Restore(JNIEnv* env) {
             this->SetHeight(it->second.height, env);
             jobject bbObj = this->GetBoundingBox(env);
             if (bbObj) {
-                ((AxisAlignedBB*)bbObj)->SetNativeBoundingBox(it->second.bb, env);
+                const Vec3D currentPosition = this->GetPos(env);
+                const AxisAlignedBB_t restoredBox = IsFinitePosition(currentPosition)
+                    ? BuildBoundingBoxAtPosition(currentPosition, it->second.width, it->second.height)
+                    : it->second.bb;
+                ((AxisAlignedBB*)bbObj)->SetNativeBoundingBox(restoredBox, env);
                 env->DeleteLocalRef(bbObj);
             }
         } catch (...) {}

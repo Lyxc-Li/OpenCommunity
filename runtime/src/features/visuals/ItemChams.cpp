@@ -170,14 +170,14 @@ namespace {
         }
 
         const std::array<WorldPoint, 8> corners = {{
-            { boundingBox.minX, boundingBox.minY, boundingBox.minZ },
-            { boundingBox.maxX, boundingBox.minY, boundingBox.minZ },
-            { boundingBox.maxX, boundingBox.minY, boundingBox.maxZ },
-            { boundingBox.minX, boundingBox.minY, boundingBox.maxZ },
-            { boundingBox.minX, boundingBox.maxY, boundingBox.minZ },
-            { boundingBox.maxX, boundingBox.maxY, boundingBox.minZ },
-            { boundingBox.maxX, boundingBox.maxY, boundingBox.maxZ },
-            { boundingBox.minX, boundingBox.maxY, boundingBox.maxZ }
+            { static_cast<float>(boundingBox.minX), static_cast<float>(boundingBox.minY), static_cast<float>(boundingBox.minZ) },
+            { static_cast<float>(boundingBox.maxX), static_cast<float>(boundingBox.minY), static_cast<float>(boundingBox.minZ) },
+            { static_cast<float>(boundingBox.maxX), static_cast<float>(boundingBox.minY), static_cast<float>(boundingBox.maxZ) },
+            { static_cast<float>(boundingBox.minX), static_cast<float>(boundingBox.minY), static_cast<float>(boundingBox.maxZ) },
+            { static_cast<float>(boundingBox.minX), static_cast<float>(boundingBox.maxY), static_cast<float>(boundingBox.minZ) },
+            { static_cast<float>(boundingBox.maxX), static_cast<float>(boundingBox.maxY), static_cast<float>(boundingBox.minZ) },
+            { static_cast<float>(boundingBox.maxX), static_cast<float>(boundingBox.maxY), static_cast<float>(boundingBox.maxZ) },
+            { static_cast<float>(boundingBox.minX), static_cast<float>(boundingBox.maxY), static_cast<float>(boundingBox.maxZ) }
         }};
 
         int visibleCorners = 0;

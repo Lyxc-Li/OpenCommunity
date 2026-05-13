@@ -3,12 +3,12 @@
 #include <jni.h>
 
 struct AxisAlignedBB_t {
-    float minX = 0.0f;
-    float minY = 0.0f;
-    float minZ = 0.0f;
-    float maxX = 0.0f;
-    float maxY = 0.0f;
-    float maxZ = 0.0f;
+    double minX = 0.0;
+    double minY = 0.0;
+    double minZ = 0.0;
+    double maxX = 0.0;
+    double maxY = 0.0;
+    double maxZ = 0.0;
 };
 
 class AxisAlignedBB {
