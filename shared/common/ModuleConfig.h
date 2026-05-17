@@ -22,7 +22,7 @@ enum class GameChatOutputMode {
 
 struct ModuleConfig {
     static constexpr std::uint32_t kMagic = 0x4746434F; // OCFG
-    static constexpr std::uint32_t kVersion = 18;
+    static constexpr std::uint32_t kVersion = 19;
 
     std::uint32_t m_Magic = kMagic;
     std::uint32_t m_Version = kVersion;
@@ -140,6 +140,10 @@ struct ModuleConfig {
         bool m_ShowAbsorption = true;
         bool m_ShowMobs = false;
         bool m_ShowAnimals = false;
+        bool m_AutoScale = true;
+        float m_Scale = 1.0f;
+        int m_MaxDistance = 64;
+        bool m_ShowPlayerESP = false;
     } NametagsVisuals;
 
     struct EnemyInfoListEntry {
