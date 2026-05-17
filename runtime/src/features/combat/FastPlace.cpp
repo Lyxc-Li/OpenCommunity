@@ -21,7 +21,13 @@ void FastPlace::TickSynchronous(void* envPtr) {
 
     jobject playerObject = Minecraft::GetThePlayer(env);
     if (playerObject) {
-        Minecraft::SetRightClickCounter(0, env);
+        const int delay = GetDelay();
+        if (m_TicksSinceReset >= delay - 1) {
+            Minecraft::SetRightClickCounter(0, env);
+            m_TicksSinceReset = 0;
+        } else {
+            ++m_TicksSinceReset;
+        }
         MarkInUse(100);
         env->DeleteLocalRef(playerObject);
     }
