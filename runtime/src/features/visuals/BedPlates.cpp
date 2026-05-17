@@ -532,16 +532,23 @@ void BedPlates::BlockIconCallback(const ImDrawList* /*drawList*/, const ImDrawCm
     GLint viewport[4] = {};
     glGetIntegerv(GL_VIEWPORT, viewport);
 
-    glPushAttrib(GL_ALL_ATTRIB_BITS);
-    GLfloat savedProj[16];
+    // Snapshot entry stack depths before any changes
+    GLint entryProjDepth, entryMVDepth;
+    glGetIntegerv(GL_PROJECTION_STACK_DEPTH, &entryProjDepth);
+    glGetIntegerv(GL_MODELVIEW_STACK_DEPTH,  &entryMVDepth);
+
+    // Save matrices without touching the stack
+    GLfloat savedProj[16], savedMV[16];
     glGetFloatv(GL_PROJECTION_MATRIX, savedProj);
+    glGetFloatv(GL_MODELVIEW_MATRIX,  savedMV);
+
+    glPushAttrib(GL_ALL_ATTRIB_BITS);
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
     glOrtho(0.0, static_cast<double>(viewport[2]), static_cast<double>(viewport[3]),
             0.0, -1000.0, 1000.0);
 
     glMatrixMode(GL_MODELVIEW);
-    glPushMatrix();
     glLoadIdentity();
 
     glEnable(GL_DEPTH_TEST);
@@ -569,6 +576,7 @@ void BedPlates::BlockIconCallback(const ImDrawList* /*drawList*/, const ImDrawCm
             glTranslatef(draw.x, draw.y, 0.0f);
             glScalef(mcScale, mcScale, 1.0f);
             renderItem->RenderItemIntoGUI(stack, 0, 0, env);
+            if (env->ExceptionCheck()) env->ExceptionClear();
 
             GLint projAfter, mvAfter;
             glGetIntegerv(GL_PROJECTION_STACK_DEPTH, &projAfter);
@@ -588,10 +596,23 @@ void BedPlates::BlockIconCallback(const ImDrawList* /*drawList*/, const ImDrawCm
 
     RenderHelper::DisableStandardItemLighting(env);
 
+    // Final drain: bring both stacks back to entry depths
+    GLint finalProj, finalMV;
+    glGetIntegerv(GL_PROJECTION_STACK_DEPTH, &finalProj);
+    glGetIntegerv(GL_MODELVIEW_STACK_DEPTH,  &finalMV);
+    if (finalProj > entryProjDepth) {
+        glMatrixMode(GL_PROJECTION);
+        for (GLint i = finalProj; i > entryProjDepth; --i) glPopMatrix();
+    }
+    if (finalMV > entryMVDepth) {
+        glMatrixMode(GL_MODELVIEW);
+        for (GLint i = finalMV; i > entryMVDepth; --i) glPopMatrix();
+    }
+
     glMatrixMode(GL_PROJECTION);
     glLoadMatrixf(savedProj);
     glMatrixMode(GL_MODELVIEW);
-    glPopMatrix();
+    glLoadMatrixf(savedMV);
     glPopAttrib();
 }
 

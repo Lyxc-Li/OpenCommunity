@@ -8,6 +8,7 @@
 #include "../../../../deps/imgui/imgui.h"
 
 #include <jni.h>
+#include <vector>
 #endif
 
 class Nametags : public Module {
@@ -22,31 +23,35 @@ public:
         AddOption(ModuleOption::Toggle("Absorption", true));
         AddOption(ModuleOption::Toggle("Mobs", false));
         AddOption(ModuleOption::Toggle("Animals", false));
+        AddOption(ModuleOption::Toggle("Auto Scale", true));
+        AddOption(ModuleOption::SliderFloat("Scale", 1.0f, 0.5f, 2.0f));
+        AddOption(ModuleOption::SliderInt("Max Distance", 64, 16, 255));
+        AddOption(ModuleOption::Toggle("Player ESP", false));
     }
 
     void SyncToConfig(void* configPtr) override {
         auto* config = static_cast<ModuleConfig*>(configPtr);
-        if (!config) {
-            return;
-        }
+        if (!config) return;
 
-        config->Nametags.m_Enabled = IsEnabled();
-        config->NametagsVisuals.m_Enabled = IsEnabled();
-        config->NametagsVisuals.m_ShowHealth = IsHealthEnabled();
-        config->NametagsVisuals.m_ShowDistance = IsDistanceEnabled();
+        config->Nametags.m_Enabled             = IsEnabled();
+        config->NametagsVisuals.m_Enabled       = IsEnabled();
+        config->NametagsVisuals.m_ShowHealth    = IsHealthEnabled();
+        config->NametagsVisuals.m_ShowDistance  = IsDistanceEnabled();
         config->NametagsVisuals.m_ShowEquipment = IsEquipmentEnabled();
         config->NametagsVisuals.m_ShowGraphicalHealth = IsGraphicalHealthEnabled();
         config->NametagsVisuals.m_ShowAbsorption = IsAbsorptionEnabled();
-        config->NametagsVisuals.m_ShowMobs = IsMobsEnabled();
-        config->NametagsVisuals.m_ShowAnimals = IsAnimalsEnabled();
-        config->Modules.m_Nametags = IsEnabled();
+        config->NametagsVisuals.m_ShowMobs      = IsMobsEnabled();
+        config->NametagsVisuals.m_ShowAnimals   = IsAnimalsEnabled();
+        config->NametagsVisuals.m_AutoScale     = IsAutoScaleEnabled();
+        config->NametagsVisuals.m_Scale         = GetScale();
+        config->NametagsVisuals.m_MaxDistance   = GetMaxDistance();
+        config->NametagsVisuals.m_ShowPlayerESP = IsPlayerESPEnabled();
+        config->Modules.m_Nametags              = IsEnabled();
     }
 
     void SyncFromConfig(void* configPtr) override {
         auto* config = static_cast<ModuleConfig*>(configPtr);
-        if (!config) {
-            return;
-        }
+        if (!config) return;
 
         SetEnabled(config->Nametags.m_Enabled || config->NametagsVisuals.m_Enabled);
         SetHealthEnabled(config->NametagsVisuals.m_ShowHealth);
@@ -56,6 +61,10 @@ public:
         SetAbsorptionEnabled(config->NametagsVisuals.m_ShowAbsorption);
         SetMobsEnabled(config->NametagsVisuals.m_ShowMobs);
         SetAnimalsEnabled(config->NametagsVisuals.m_ShowAnimals);
+        SetAutoScaleEnabled(config->NametagsVisuals.m_AutoScale);
+        SetScale(config->NametagsVisuals.m_Scale);
+        SetMaxDistance(config->NametagsVisuals.m_MaxDistance);
+        SetPlayerESPEnabled(config->NametagsVisuals.m_ShowPlayerESP);
     }
 
 #ifdef _RUNTIME
@@ -63,87 +72,77 @@ public:
     static void SetFont(ImFont* font);
 
     void RenderOverlay(ImDrawList* drawList, float screenW, float screenH) override;
+    void ShutdownRuntime(void* envPtr) override;
 
 private:
+    static void ItemIconCallback(const ImDrawList* drawList, const ImDrawCmd* cmd);
+
+    struct FrameIconDraw {
+        jobject itemStackGlobalRef = nullptr;
+        float x    = 0.0f;
+        float y    = 0.0f;
+        float size = 0.0f;
+    };
+
     static ImFont* s_SanFranciscoBoldFont;
+
+    std::vector<FrameIconDraw> m_FrameIconDraws;
+    std::vector<jobject>       m_FrameItemGlobalRefs;
+    std::vector<jobject>       m_PrevFrameItemGlobalRefs;
 #endif
 
 private:
-    static constexpr size_t kHealthOption = 0;
-    static constexpr size_t kDistanceOption = 1;
-    static constexpr size_t kEquipmentOption = 2;
+    static constexpr size_t kHealthOption          = 0;
+    static constexpr size_t kDistanceOption        = 1;
+    static constexpr size_t kEquipmentOption       = 2;
     static constexpr size_t kGraphicalHealthOption = 3;
-    static constexpr size_t kAbsorptionOption = 4;
-    static constexpr size_t kMobsOption = 5;
-    static constexpr size_t kAnimalsOption = 6;
+    static constexpr size_t kAbsorptionOption      = 4;
+    static constexpr size_t kMobsOption            = 5;
+    static constexpr size_t kAnimalsOption         = 6;
+    static constexpr size_t kAutoScaleOption       = 7;
+    static constexpr size_t kScaleOption           = 8;
+    static constexpr size_t kMaxDistanceOption     = 9;
+    static constexpr size_t kPlayerESPOption       = 10;
 
-    bool IsHealthEnabled() const {
-        return m_Options.size() > kHealthOption && m_Options[kHealthOption].boolValue;
+    bool IsHealthEnabled()          const { return m_Options.size() > kHealthOption          && m_Options[kHealthOption].boolValue; }
+    bool IsDistanceEnabled()        const { return m_Options.size() > kDistanceOption        && m_Options[kDistanceOption].boolValue; }
+    bool IsEquipmentEnabled()       const { return m_Options.size() > kEquipmentOption       && m_Options[kEquipmentOption].boolValue; }
+    bool IsGraphicalHealthEnabled() const { return m_Options.size() > kGraphicalHealthOption && m_Options[kGraphicalHealthOption].boolValue; }
+    bool IsAbsorptionEnabled()      const { return m_Options.size() > kAbsorptionOption      && m_Options[kAbsorptionOption].boolValue; }
+    bool IsMobsEnabled()            const { return m_Options.size() > kMobsOption            && m_Options[kMobsOption].boolValue; }
+    bool IsAnimalsEnabled()         const { return m_Options.size() > kAnimalsOption         && m_Options[kAnimalsOption].boolValue; }
+    bool IsAutoScaleEnabled()       const { return m_Options.size() > kAutoScaleOption       && m_Options[kAutoScaleOption].boolValue; }
+    bool IsPlayerESPEnabled()       const { return m_Options.size() > kPlayerESPOption       && m_Options[kPlayerESPOption].boolValue; }
+
+    float GetScale() const {
+        return m_Options.size() > kScaleOption
+            ? (std::max)(0.5f, (std::min)(2.0f, m_Options[kScaleOption].floatValue))
+            : 1.0f;
     }
 
-    bool IsDistanceEnabled() const {
-        return m_Options.size() > kDistanceOption && m_Options[kDistanceOption].boolValue;
+    int GetMaxDistance() const {
+        return m_Options.size() > kMaxDistanceOption
+            ? (std::max)(16, (std::min)(255, m_Options[kMaxDistanceOption].intValue))
+            : 64;
     }
 
-    bool IsEquipmentEnabled() const {
-        return m_Options.size() > kEquipmentOption && m_Options[kEquipmentOption].boolValue;
+    void SetHealthEnabled(bool v)          { if (m_Options.size() > kHealthOption)          m_Options[kHealthOption].boolValue = v; }
+    void SetDistanceEnabled(bool v)        { if (m_Options.size() > kDistanceOption)        m_Options[kDistanceOption].boolValue = v; }
+    void SetEquipmentEnabled(bool v)       { if (m_Options.size() > kEquipmentOption)       m_Options[kEquipmentOption].boolValue = v; }
+    void SetGraphicalHealthEnabled(bool v) { if (m_Options.size() > kGraphicalHealthOption) m_Options[kGraphicalHealthOption].boolValue = v; }
+    void SetAbsorptionEnabled(bool v)      { if (m_Options.size() > kAbsorptionOption)      m_Options[kAbsorptionOption].boolValue = v; }
+    void SetMobsEnabled(bool v)            { if (m_Options.size() > kMobsOption)            m_Options[kMobsOption].boolValue = v; }
+    void SetAnimalsEnabled(bool v)         { if (m_Options.size() > kAnimalsOption)         m_Options[kAnimalsOption].boolValue = v; }
+    void SetAutoScaleEnabled(bool v)       { if (m_Options.size() > kAutoScaleOption)       m_Options[kAutoScaleOption].boolValue = v; }
+    void SetPlayerESPEnabled(bool v)       { if (m_Options.size() > kPlayerESPOption)       m_Options[kPlayerESPOption].boolValue = v; }
+
+    void SetScale(float v) {
+        if (m_Options.size() > kScaleOption)
+            m_Options[kScaleOption].floatValue = (std::max)(0.5f, (std::min)(2.0f, v));
     }
 
-    bool IsGraphicalHealthEnabled() const {
-        return m_Options.size() > kGraphicalHealthOption && m_Options[kGraphicalHealthOption].boolValue;
-    }
-
-    bool IsAbsorptionEnabled() const {
-        return m_Options.size() > kAbsorptionOption && m_Options[kAbsorptionOption].boolValue;
-    }
-
-    bool IsMobsEnabled() const {
-        return m_Options.size() > kMobsOption && m_Options[kMobsOption].boolValue;
-    }
-
-    bool IsAnimalsEnabled() const {
-        return m_Options.size() > kAnimalsOption && m_Options[kAnimalsOption].boolValue;
-    }
-
-    void SetHealthEnabled(bool value) {
-        if (m_Options.size() > kHealthOption) {
-            m_Options[kHealthOption].boolValue = value;
-        }
-    }
-
-    void SetDistanceEnabled(bool value) {
-        if (m_Options.size() > kDistanceOption) {
-            m_Options[kDistanceOption].boolValue = value;
-        }
-    }
-
-    void SetEquipmentEnabled(bool value) {
-        if (m_Options.size() > kEquipmentOption) {
-            m_Options[kEquipmentOption].boolValue = value;
-        }
-    }
-
-    void SetGraphicalHealthEnabled(bool value) {
-        if (m_Options.size() > kGraphicalHealthOption) {
-            m_Options[kGraphicalHealthOption].boolValue = value;
-        }
-    }
-
-    void SetAbsorptionEnabled(bool value) {
-        if (m_Options.size() > kAbsorptionOption) {
-            m_Options[kAbsorptionOption].boolValue = value;
-        }
-    }
-
-    void SetMobsEnabled(bool value) {
-        if (m_Options.size() > kMobsOption) {
-            m_Options[kMobsOption].boolValue = value;
-        }
-    }
-
-    void SetAnimalsEnabled(bool value) {
-        if (m_Options.size() > kAnimalsOption) {
-            m_Options[kAnimalsOption].boolValue = value;
-        }
+    void SetMaxDistance(int v) {
+        if (m_Options.size() > kMaxDistanceOption)
+            m_Options[kMaxDistanceOption].intValue = (std::max)(16, (std::min)(255, v));
     }
 };
