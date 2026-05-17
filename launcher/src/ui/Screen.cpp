@@ -3922,139 +3922,31 @@ void Screen::RenderIntro() {
         const ImVec2 wp = ImGui::GetWindowPos();
 
         DrawWindowBase(dl, wp, m_Width, m_Height);
-        DrawTopographicBackground(dl, wp, m_Width, m_Height, elapsed);
 
-        const float line1FontSize = 32.0f;
-        const float line2FontSize = 22.0f;
-        const float charsPerSec = 30.0f;
+        const float loadDuration = 2.5f;
+        const float progress = (std::min)(elapsed / loadDuration, 1.0f);
 
-        const char* line1Full = "Hey! I'm Lopes.";
-        const int line1Len = static_cast<int>(strlen(line1Full));
-        const float line1Start = 0.3f;
+        ImFont* labelFont = m_FontBoldMed ? m_FontBoldMed : ImGui::GetFont();
+        const float labelFontSize = labelFont ? labelFont->FontSize : ImGui::GetFontSize();
+        const char* label = "Loading";
+        const ImVec2 labelSz = labelFont->CalcTextSizeA(labelFontSize, FLT_MAX, 0.0f, label);
 
-        const char* line2Full = "Welcome to our open-source client, shaped by features the community really cares about.";
-        const int line2Len = static_cast<int>(strlen(line2Full));
-        const float line2Start = line1Start + (float)line1Len / charsPerSec + 0.3f;
+        const float barW = m_Width * 0.45f;
+        const float barH = 6.0f;
+        const float barX = wp.x + (m_Width - barW) * 0.5f;
+        const float barY = wp.y + m_Height * 0.5f + 10.0f;
 
-        const int line1Chars = (int)fminf((float)line1Len, fmaxf(0.0f, (elapsed - line1Start) * charsPerSec));
-        const int line2Chars = (int)fminf((float)line2Len, fmaxf(0.0f, (elapsed - line2Start) * charsPerSec));
-        auto calcLineWidth = [&](auto* segs, int segCount, float fontSize, int totalChars) -> float {
-            float w = 0.0f;
-            int drawn = 0;
-            for (int i = 0; i < segCount; i++) {
-                int segLen = (int)strlen(segs[i].text);
-                int segChars = (int)fminf((float)segLen, fmaxf(0.0f, (float)(totalChars - drawn)));
-                if (segChars <= 0) break;
-                char buf[128] = {};
-                memcpy(buf, segs[i].text, segChars);
-                buf[segChars] = '\0';
-                ImFont* font = (fontSize > 35.0f) ? (segs[i].bold ? m_FontTitle : m_FontBodyLarge) : (segs[i].bold ? m_FontBoldMed : m_FontBodyMed);
-                w += CalcTextSizeWithFont(font, buf, fontSize).x;
-                drawn += segChars;
-            }
-            return w;
-        };
+        dl->AddText(labelFont, labelFontSize,
+            ImVec2(wp.x + (m_Width - labelSz.x) * 0.5f, barY - labelFontSize - 14.0f),
+            color::GetStrongTextU32(), label);
 
-        struct TextSegment { const char* text; bool bold; };
+        const ImU32 trackColor = color::GetBorderU32(0.5f);
+        const ImU32 fillColor  = color::GetAccentU32(1.0f);
+        dl->AddRectFilled(ImVec2(barX, barY), ImVec2(barX + barW, barY + barH), trackColor, barH * 0.5f);
+        dl->AddRectFilled(ImVec2(barX, barY), ImVec2(barX + barW * progress, barY + barH), fillColor, barH * 0.5f);
 
-        const float line1Y = wp.y + 60.0f;
-        const float line2Y = wp.y + 60.0f + line1FontSize + 30.0f;
-        if (line1Chars > 0) {
-            TextSegment segs1[] = {
-                { "Hey! I'm ", false },
-                { "Lopes", true },
-                { ".", false }
-            };
-
-            float line1W = calcLineWidth(segs1, 3, line1FontSize, line1Chars);
-            float curX = wp.x + (m_Width - line1W) * 0.5f;
-            int charsDrawn = 0;
-            for (auto& seg : segs1) {
-                int segLen = (int)strlen(seg.text);
-                int segChars = (int)fminf((float)segLen, fmaxf(0.0f, (float)(line1Chars - charsDrawn)));
-                if (segChars <= 0) break;
-
-                char buf[64] = {};
-                memcpy(buf, seg.text, segChars);
-                buf[segChars] = '\0';
-
-                ImFont* font = seg.bold ? m_FontTitle : m_FontBodyLarge;
-                dl->AddText(font, line1FontSize, ImVec2(curX, line1Y), color::GetAccentU32(1.0f), buf);
-
-                ImVec2 fullSz = CalcTextSizeWithFont(font, buf, line1FontSize);
-                curX += fullSz.x;
-                charsDrawn += segChars;
-            }
-
-            if (line1Chars < line1Len) {
-                float blinkAlpha = (sinf(elapsed * 6.0f) > 0.0f) ? 0.8f : 0.0f;
-                dl->AddLine(ImVec2(curX + 2.0f, line1Y + 2.0f), ImVec2(curX + 2.0f, line1Y + line1FontSize - 2.0f), color::GetAccentU32(blinkAlpha), 1.5f);
-            }
-        }
-
-        if (line2Chars > 0) {
-            TextSegment segs2[] = {
-                { "Welcome to our ", false },
-                { "open-source", true },
-                { " client, shaped by ", false },
-                { "features", true },
-                { " the community ", false },
-                { "really cares about", true },
-                { ".", false }
-            };
-
-            float line2W = calcLineWidth(segs2, 7, line2FontSize, line2Chars);
-            float curX = wp.x + (m_Width - line2W) * 0.5f;
-            int charsDrawn = 0;
-            for (auto& seg : segs2) {
-                int segLen = (int)strlen(seg.text);
-                int segChars = (int)fminf((float)segLen, fmaxf(0.0f, (float)(line2Chars - charsDrawn)));
-                if (segChars <= 0) break;
-
-                char buf[128] = {};
-                memcpy(buf, seg.text, segChars);
-                buf[segChars] = '\0';
-
-                ImFont* font = seg.bold ? m_FontBoldMed : m_FontBodyMed;
-                dl->AddText(font, line2FontSize, ImVec2(curX, line2Y), color::GetAccentU32(1.0f), buf);
-
-                ImVec2 fullSz = CalcTextSizeWithFont(font, buf, line2FontSize);
-                curX += fullSz.x;
-                charsDrawn += segChars;
-            }
-
-            if (line2Chars < line2Len) {
-                float blinkAlpha = (sinf(elapsed * 6.0f) > 0.0f) ? 0.8f : 0.0f;
-                dl->AddLine(ImVec2(curX + 2.0f, line2Y + 2.0f), ImVec2(curX + 2.0f, line2Y + line2FontSize - 2.0f), color::GetAccentU32(blinkAlpha), 1.5f);
-            }
-        }
-
-        const float totalAnimTime = line2Start + (float)line2Len / charsPerSec + 0.5f;
-        const bool showButton = elapsed >= totalAnimTime;
-        if (showButton) {
-            const char* btnLabel = "Let's go";
-            ImGui::PushFont(m_FontTitle);
-            
-            const float breathTime = static_cast<float>(ImGui::GetTime()) * 2.5f;
-            const float breathScale = 0.92f + 0.08f * sinf(breathTime);
-            
-            ImVec2 baseSize = ImGui::CalcTextSize(btnLabel);
-            float scaledFontSize = 32.0f * breathScale;
-            ImVec2 scaledSize = CalcTextSizeWithFont(m_FontTitle, btnLabel, scaledFontSize);
-            
-            float btnX = (m_Width - scaledSize.x) * 0.5f;
-            float btnY = m_Height - scaledSize.y - 40.0f;
-
-            ImGui::SetCursorPos(ImVec2((m_Width - baseSize.x) * 0.5f, m_Height - baseSize.y - 40.0f));
-            if (ImGui::InvisibleButton("##letsgo", baseSize)) {
-                m_State = AppState::InstanceChooser;
-            }
-            const bool hovered = ImGui::IsItemHovered();
-
-            ImVec4 btnColor = hovered ? color::GetSecondaryTextVec4() : color::GetStrongTextVec4();
-            dl->AddText(m_FontTitle, scaledFontSize, ImVec2(wp.x + btnX, wp.y + btnY), ImGui::ColorConvertFloat4ToU32(btnColor), btnLabel);
-            
-            ImGui::PopFont();
+        if (progress >= 1.0f) {
+            m_State = AppState::InstanceChooser;
         }
 
         ImGui::End();
