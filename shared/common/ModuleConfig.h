@@ -22,7 +22,7 @@ enum class GameChatOutputMode {
 
 struct ModuleConfig {
     static constexpr std::uint32_t kMagic = 0x4746434F; // OCFG
-    static constexpr std::uint32_t kVersion = 17;
+    static constexpr std::uint32_t kVersion = 18;
 
     std::uint32_t m_Magic = kMagic;
     std::uint32_t m_Version = kVersion;
@@ -203,7 +203,7 @@ struct ModuleConfig {
 
     struct {
         bool m_Enabled = false;
-        int m_Range = 28;
+        int m_Range = 64;
         float m_Color[4] = { 0.15f, 0.85f, 1.0f, 0.95f };
         float m_Scale = 1.0f;
     } BedPlates;
