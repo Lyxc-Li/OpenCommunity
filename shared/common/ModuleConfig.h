@@ -22,7 +22,7 @@ enum class GameChatOutputMode {
 
 struct ModuleConfig {
     static constexpr std::uint32_t kMagic = 0x4746434F; // OCFG
-    static constexpr std::uint32_t kVersion = 14;
+    static constexpr std::uint32_t kVersion = 15;
 
     std::uint32_t m_Magic = kMagic;
     std::uint32_t m_Version = kVersion;
@@ -224,6 +224,10 @@ struct ModuleConfig {
 
     struct {
         bool m_Enabled = false;
+    } FastPlace;
+
+    struct {
+        bool m_Enabled = false;
     } NoJumpDelay;
 
     struct {
@@ -241,6 +245,7 @@ struct ModuleConfig {
         bool m_ArmorSwap = false;
         bool m_AutoGapple = false;
         bool m_NoHitDelay = false;
+        bool m_FastPlace = false;
         bool m_NoJumpDelay = false;
         bool m_DamageIndicator = false;
         bool m_Target = false;

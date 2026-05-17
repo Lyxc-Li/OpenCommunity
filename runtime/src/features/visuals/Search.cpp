@@ -45,15 +45,20 @@ std::vector<std::string> Search::GetActiveQueries() const {
     return queries;
 }
 
-void Search::TickSynchronous(void* envPtr) {
-    auto* env = static_cast<JNIEnv*>(envPtr);
-    if (!env) {
-        return;
-    }
-
+void Search::TickSynchronous(void* /*envPtr*/) {
     if (!IsEnabled()) {
         std::lock_guard<std::mutex> lock(m_EntriesMutex);
         m_RenderEntries.clear();
+        return;
+    }
+
+    if (m_ScanRunning.load(std::memory_order_acquire)) {
+        return;
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    if (g_LastSearchScanTime != std::chrono::steady_clock::time_point::min() &&
+        (now - g_LastSearchScanTime) < kSearchScanInterval) {
         return;
     }
 
@@ -64,21 +69,32 @@ void Search::TickSynchronous(void* envPtr) {
         return;
     }
 
-    const auto now = std::chrono::steady_clock::now();
-    if (g_LastSearchScanTime != std::chrono::steady_clock::time_point::min() &&
-        (now - g_LastSearchScanTime) < kSearchScanInterval) {
+    g_LastSearchScanTime = now;
+    m_ScanRunning.store(true, std::memory_order_release);
+    std::thread([this, queries, range = GetRange(), caveOnly = IsOnlyCavesEnabled()]() mutable {
+        RunScan(std::move(queries), range, caveOnly);
+    }).detach();
+}
+
+void Search::RunScan(std::vector<std::string> queries, int range, bool caveOnly) {
+    if (!g_Game || !g_Game->IsInitialized()) {
+        m_ScanRunning.store(false, std::memory_order_release);
+        return;
+    }
+
+    JNIEnv* env = g_Game->GetCurrentEnv();
+    if (!env || env->PushLocalFrame(512) != 0) {
+        m_ScanRunning.store(false, std::memory_order_release);
         return;
     }
 
     jobject worldObject = Minecraft::GetTheWorld(env);
     jobject localPlayerObject = Minecraft::GetThePlayer(env);
     if (!worldObject || !localPlayerObject) {
-        if (worldObject) {
-            env->DeleteLocalRef(worldObject);
-        }
-        if (localPlayerObject) {
-            env->DeleteLocalRef(localPlayerObject);
-        }
+        if (worldObject) env->DeleteLocalRef(worldObject);
+        if (localPlayerObject) env->DeleteLocalRef(localPlayerObject);
+        env->PopLocalFrame(nullptr);
+        m_ScanRunning.store(false, std::memory_order_release);
         return;
     }
 
@@ -88,15 +104,15 @@ void Search::TickSynchronous(void* envPtr) {
         env->ExceptionClear();
         env->DeleteLocalRef(localPlayerObject);
         env->DeleteLocalRef(worldObject);
+        env->PopLocalFrame(nullptr);
+        m_ScanRunning.store(false, std::memory_order_release);
         return;
     }
 
-    const int range = GetRange();
     const int baseX = static_cast<int>(std::floor(localPos.x));
     const int baseY = static_cast<int>(std::floor(localPos.y));
     const int baseZ = static_cast<int>(std::floor(localPos.z));
     const int rangeSq = range * range;
-    const bool caveOnly = IsOnlyCavesEnabled();
 
     std::vector<SearchRenderEntry> foundEntries;
     foundEntries.reserve(96);
@@ -114,9 +130,7 @@ void Search::TickSynchronous(void* envPtr) {
                 const int blockZ = baseZ + dz;
 
                 jobject blockObject = BlockVisuals::GetBlockObjectAt(env, worldObject, blockX, blockY, blockZ);
-                if (!blockObject) {
-                    continue;
-                }
+                if (!blockObject) continue;
 
                 const BlockVisuals::BlockDescriptor descriptor = BlockVisuals::DescribeBlock(env, blockObject);
                 if (descriptor.isAir) {
@@ -143,15 +157,9 @@ void Search::TickSynchronous(void* envPtr) {
                 }
 
                 foundEntries.push_back({
-                    static_cast<double>(blockX),
-                    static_cast<double>(blockY),
-                    static_cast<double>(blockZ),
-                    static_cast<double>(blockX) + 1.0,
-                    static_cast<double>(blockY) + 1.0,
-                    static_cast<double>(blockZ) + 1.0,
-                    static_cast<double>(blockX) + 0.5,
-                    static_cast<double>(blockY) + 0.5,
-                    static_cast<double>(blockZ) + 0.5,
+                    static_cast<double>(blockX),     static_cast<double>(blockY),     static_cast<double>(blockZ),
+                    static_cast<double>(blockX) + 1.0, static_cast<double>(blockY) + 1.0, static_cast<double>(blockZ) + 1.0,
+                    static_cast<double>(blockX) + 0.5, static_cast<double>(blockY) + 0.5, static_cast<double>(blockZ) + 0.5,
                     static_cast<double>(distanceSq)
                 });
 
@@ -160,8 +168,8 @@ void Search::TickSynchronous(void* envPtr) {
         }
     }
 
-    std::sort(foundEntries.begin(), foundEntries.end(), [](const SearchRenderEntry& left, const SearchRenderEntry& right) {
-        return left.distanceSq < right.distanceSq;
+    std::sort(foundEntries.begin(), foundEntries.end(), [](const SearchRenderEntry& a, const SearchRenderEntry& b) {
+        return a.distanceSq < b.distanceSq;
     });
 
     {
@@ -169,9 +177,10 @@ void Search::TickSynchronous(void* envPtr) {
         m_RenderEntries = std::move(foundEntries);
     }
 
-    g_LastSearchScanTime = now;
     env->DeleteLocalRef(localPlayerObject);
     env->DeleteLocalRef(worldObject);
+    env->PopLocalFrame(nullptr);
+    m_ScanRunning.store(false, std::memory_order_release);
 }
 
 void Search::RenderOverlay(ImDrawList* drawList, float screenW, float screenH) {

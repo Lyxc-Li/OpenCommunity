@@ -119,6 +119,7 @@
     <ClCompile Include="src\features\combat\ArmorSwap.cpp" />
     <ClCompile Include="src\features\combat\AutoGapple.cpp" />
     <ClCompile Include="src\features\combat\NoHitDelay.cpp" />
+    <ClCompile Include="src\features\combat\FastPlace.cpp" />
     <ClCompile Include="src\features\movement\NoJumpDelay.cpp" />
     <ClCompile Include="src\features\visuals\Target.cpp" />
     <ClCompile Include="src\features\visuals\HideClans.cpp" />
@@ -184,6 +185,7 @@
     <ClInclude Include="src\features\combat\ArmorSwap.h" />
     <ClInclude Include="src\features\combat\AutoGapple.h" />
     <ClInclude Include="src\features\combat\NoHitDelay.h" />
+    <ClInclude Include="src\features\combat\FastPlace.h" />
     <ClInclude Include="src\features\movement\NoJumpDelay.h" />
     <ClInclude Include="src\features\visuals\ArrayList.h" />
     <ClInclude Include="src\features\visuals\Target.h" />

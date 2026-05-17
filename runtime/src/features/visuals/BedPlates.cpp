@@ -13,8 +13,8 @@
 #include <chrono>
 #include <cmath>
 #include <gl/GL.h>
-#include <map>
-#include <sstream>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace {
     constexpr auto kBedScanInterval = std::chrono::milliseconds(700);
@@ -26,10 +26,10 @@ namespace {
         return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
     }
 
-    std::string MakeBedKey(int x, int y, int z) {
-        std::ostringstream stream;
-        stream << x << ':' << y << ':' << z;
-        return stream.str();
+    uint64_t MakeBedKey(int x, int y, int z) {
+        return (static_cast<uint64_t>(static_cast<uint16_t>(x)) << 32) |
+               (static_cast<uint64_t>(static_cast<uint16_t>(y)) << 16) |
+               static_cast<uint64_t>(static_cast<uint16_t>(z));
     }
 
     std::string BuildChipLabel(const std::string& displayName) {
@@ -76,15 +76,14 @@ namespace {
     }
 }
 
-void BedPlates::TickSynchronous(void* envPtr) {
-    auto* env = static_cast<JNIEnv*>(envPtr);
-    if (!env) {
-        return;
-    }
-
+void BedPlates::TickSynchronous(void* /*envPtr*/) {
     if (!IsEnabled()) {
         std::lock_guard<std::mutex> lock(m_EntriesMutex);
         m_RenderEntries.clear();
+        return;
+    }
+
+    if (m_ScanRunning.load(std::memory_order_acquire)) {
         return;
     }
 
@@ -94,15 +93,30 @@ void BedPlates::TickSynchronous(void* envPtr) {
         return;
     }
 
+    g_LastBedScanTime = now;
+    m_ScanRunning.store(true, std::memory_order_release);
+    std::thread([this, range = GetRange()]() { RunScan(range); }).detach();
+}
+
+void BedPlates::RunScan(int range) {
+    if (!g_Game || !g_Game->IsInitialized()) {
+        m_ScanRunning.store(false, std::memory_order_release);
+        return;
+    }
+
+    JNIEnv* env = g_Game->GetCurrentEnv();
+    if (!env || env->PushLocalFrame(512) != 0) {
+        m_ScanRunning.store(false, std::memory_order_release);
+        return;
+    }
+
     jobject worldObject = Minecraft::GetTheWorld(env);
     jobject localPlayerObject = Minecraft::GetThePlayer(env);
     if (!worldObject || !localPlayerObject) {
-        if (worldObject) {
-            env->DeleteLocalRef(worldObject);
-        }
-        if (localPlayerObject) {
-            env->DeleteLocalRef(localPlayerObject);
-        }
+        if (worldObject) env->DeleteLocalRef(worldObject);
+        if (localPlayerObject) env->DeleteLocalRef(localPlayerObject);
+        env->PopLocalFrame(nullptr);
+        m_ScanRunning.store(false, std::memory_order_release);
         return;
     }
 
@@ -112,24 +126,23 @@ void BedPlates::TickSynchronous(void* envPtr) {
         env->ExceptionClear();
         env->DeleteLocalRef(localPlayerObject);
         env->DeleteLocalRef(worldObject);
+        env->PopLocalFrame(nullptr);
+        m_ScanRunning.store(false, std::memory_order_release);
         return;
     }
 
-    const int range = GetRange();
     const int baseX = static_cast<int>(std::floor(localPos.x));
     const int baseY = static_cast<int>(std::floor(localPos.y));
     const int baseZ = static_cast<int>(std::floor(localPos.z));
     const int rangeSq = range * range;
+
     static constexpr std::array<std::array<int, 3>, 4> kHorizontalNeighbors = {{
-        {{ 1, 0, 0 }},
-        {{ -1, 0, 0 }},
-        {{ 0, 0, 1 }},
-        {{ 0, 0, -1 }}
+        {{ 1, 0, 0 }}, {{ -1, 0, 0 }}, {{ 0, 0, 1 }}, {{ 0, 0, -1 }}
     }};
 
     std::vector<BedPlateEntry> foundEntries;
     foundEntries.reserve(16);
-    std::map<std::string, size_t> seenBeds;
+    std::unordered_set<uint64_t> seenBeds;
 
     for (int dx = -range; dx <= range && foundEntries.size() < kMaxBedEntries; ++dx) {
         for (int dy = -6; dy <= 6 && foundEntries.size() < kMaxBedEntries; ++dy) {
@@ -154,23 +167,15 @@ void BedPlates::TickSynchronous(void* envPtr) {
                     continue;
                 }
 
-                int otherX = blockX;
-                int otherY = blockY;
-                int otherZ = blockZ;
+                int otherX = blockX, otherY = blockY, otherZ = blockZ;
                 bool hasSecondHalf = false;
 
                 for (const auto& offset : kHorizontalNeighbors) {
                     jobject neighborBlock = BlockVisuals::GetBlockObjectAt(env, worldObject, blockX + offset[0], blockY + offset[1], blockZ + offset[2]);
-                    if (!neighborBlock) {
-                        continue;
-                    }
-
-                    const BlockVisuals::BlockDescriptor neighborDescriptor = BlockVisuals::DescribeBlock(env, neighborBlock);
+                    if (!neighborBlock) continue;
+                    const BlockVisuals::BlockDescriptor neighborDesc = BlockVisuals::DescribeBlock(env, neighborBlock);
                     env->DeleteLocalRef(neighborBlock);
-                    if (!BlockVisuals::BlockMatchesQuery(neighborDescriptor, "bed")) {
-                        continue;
-                    }
-
+                    if (!BlockVisuals::BlockMatchesQuery(neighborDesc, "bed")) continue;
                     otherX = blockX + offset[0];
                     otherY = blockY + offset[1];
                     otherZ = blockZ + offset[2];
@@ -178,19 +183,14 @@ void BedPlates::TickSynchronous(void* envPtr) {
                     break;
                 }
 
-                int canonicalX = blockX;
-                int canonicalY = blockY;
-                int canonicalZ = blockZ;
-                if (hasSecondHalf) {
-                    if (std::tie(otherX, otherY, otherZ) < std::tie(canonicalX, canonicalY, canonicalZ)) {
-                        canonicalX = otherX;
-                        canonicalY = otherY;
-                        canonicalZ = otherZ;
-                    }
+                int canonicalX = blockX, canonicalY = blockY, canonicalZ = blockZ;
+                if (hasSecondHalf && std::tie(otherX, otherY, otherZ) < std::tie(canonicalX, canonicalY, canonicalZ)) {
+                    canonicalX = otherX;
+                    canonicalY = otherY;
+                    canonicalZ = otherZ;
                 }
 
-                const std::string key = MakeBedKey(canonicalX, canonicalY, canonicalZ);
-                if (seenBeds.find(key) != seenBeds.end()) {
+                if (!seenBeds.insert(MakeBedKey(canonicalX, canonicalY, canonicalZ)).second) {
                     continue;
                 }
 
@@ -209,34 +209,25 @@ void BedPlates::TickSynchronous(void* envPtr) {
                 const int minZ = (std::min)(entry.z, entry.otherZ);
                 const int maxZ = (std::max)(entry.z, entry.otherZ);
 
-                struct DefenseInfo {
-                    std::string displayName;
-                    int count = 0;
-                };
-                std::map<std::string, DefenseInfo> defenseCounts;
+                struct DefenseInfo { std::string displayName; int count = 0; };
+                std::unordered_map<std::string, DefenseInfo> defenseCounts;
 
                 for (int sampleX = minX - 1; sampleX <= maxX + 1; ++sampleX) {
                     for (int sampleY = entry.y; sampleY <= entry.y + 2; ++sampleY) {
                         for (int sampleZ = minZ - 1; sampleZ <= maxZ + 1; ++sampleZ) {
-                            const bool isBedBlock = (sampleX == entry.x && sampleY == entry.y && sampleZ == entry.z) ||
+                            const bool isBedBlock =
+                                (sampleX == entry.x && sampleY == entry.y && sampleZ == entry.z) ||
                                 (entry.hasSecondHalf && sampleX == entry.otherX && sampleY == entry.otherY && sampleZ == entry.otherZ);
-                            if (isBedBlock) {
-                                continue;
-                            }
+                            if (isBedBlock) continue;
 
                             jobject defenseBlock = BlockVisuals::GetBlockObjectAt(env, worldObject, sampleX, sampleY, sampleZ);
-                            if (!defenseBlock) {
-                                continue;
-                            }
-
-                            const BlockVisuals::BlockDescriptor defenseDescriptor = BlockVisuals::DescribeBlock(env, defenseBlock);
+                            if (!defenseBlock) continue;
+                            const BlockVisuals::BlockDescriptor defenseDesc = BlockVisuals::DescribeBlock(env, defenseBlock);
                             env->DeleteLocalRef(defenseBlock);
-                            if (defenseDescriptor.isAir || BlockVisuals::BlockMatchesQuery(defenseDescriptor, "bed")) {
-                                continue;
-                            }
+                            if (defenseDesc.isAir || BlockVisuals::BlockMatchesQuery(defenseDesc, "bed")) continue;
 
-                            auto& info = defenseCounts[defenseDescriptor.compactName];
-                            info.displayName = defenseDescriptor.displayName;
+                            auto& info = defenseCounts[defenseDesc.compactName];
+                            info.displayName = defenseDesc.displayName;
                             ++info.count;
                         }
                     }
@@ -244,31 +235,23 @@ void BedPlates::TickSynchronous(void* envPtr) {
 
                 std::vector<DefenseInfo> sortedDefense;
                 sortedDefense.reserve(defenseCounts.size());
-                for (const auto& [keyName, info] : defenseCounts) {
-                    (void)keyName;
-                    sortedDefense.push_back(info);
+                for (auto& [k, info] : defenseCounts) { (void)k; sortedDefense.push_back(info); }
+                std::sort(sortedDefense.begin(), sortedDefense.end(), [](const DefenseInfo& a, const DefenseInfo& b) { return a.count > b.count; });
+
+                for (size_t i = 0; i < sortedDefense.size() && i < 3; ++i) {
+                    entry.chips.push_back({ BuildChipLabel(sortedDefense[i].displayName), sortedDefense[i].count });
                 }
-
-                std::sort(sortedDefense.begin(), sortedDefense.end(), [](const DefenseInfo& left, const DefenseInfo& right) {
-                    return left.count > right.count;
-                });
-
-                for (size_t index = 0; index < sortedDefense.size() && index < 3; ++index) {
-                    entry.chips.push_back({ BuildChipLabel(sortedDefense[index].displayName), sortedDefense[index].count });
-                }
-
                 if (entry.chips.empty()) {
                     entry.chips.push_back({ "BED", 1 });
                 }
 
-                seenBeds.emplace(key, foundEntries.size());
                 foundEntries.push_back(entry);
             }
         }
     }
 
-    std::sort(foundEntries.begin(), foundEntries.end(), [](const BedPlateEntry& left, const BedPlateEntry& right) {
-        return left.distance < right.distance;
+    std::sort(foundEntries.begin(), foundEntries.end(), [](const BedPlateEntry& a, const BedPlateEntry& b) {
+        return a.distance < b.distance;
     });
 
     {
@@ -276,9 +259,10 @@ void BedPlates::TickSynchronous(void* envPtr) {
         m_RenderEntries = std::move(foundEntries);
     }
 
-    g_LastBedScanTime = now;
     env->DeleteLocalRef(localPlayerObject);
     env->DeleteLocalRef(worldObject);
+    env->PopLocalFrame(nullptr);
+    m_ScanRunning.store(false, std::memory_order_release);
 }
 
 void BedPlates::RenderOverlay(ImDrawList* drawList, float screenW, float screenH) {

@@ -7,6 +7,7 @@
 #include "combat/ArmorSwap.h"
 #include "combat/AutoGapple.h"
 #include "combat/NoHitDelay.h"
+#include "combat/FastPlace.h"
 #include "movement/NoJumpDelay.h"
 #include "visuals/ArrayList.h"
 #include "visuals/DamageIndicator.h"
@@ -31,6 +32,7 @@ namespace ModuleRegistry {
         modules.RegisterModule(std::make_shared<ArmorSwap>());
         modules.RegisterModule(std::make_shared<AutoGapple>());
         modules.RegisterModule(std::make_shared<NoHitDelay>());
+        modules.RegisterModule(std::make_shared<FastPlace>());
         modules.RegisterModule(std::make_shared<Target>());
         modules.RegisterModule(std::make_shared<HideClans>());
         modules.RegisterModule(std::make_shared<NoJumpDelay>());

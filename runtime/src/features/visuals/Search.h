@@ -82,6 +82,8 @@ public:
     void RenderOverlay(ImDrawList* drawList, float screenW, float screenH) override;
 
 private:
+    void RunScan(std::vector<std::string> queries, int range, bool caveOnly);
+
     struct SearchRenderEntry {
         double minX = 0.0;
         double minY = 0.0;
@@ -97,6 +99,7 @@ private:
 
     std::vector<std::string> GetActiveQueries() const;
 
+    std::atomic<bool> m_ScanRunning{false};
     mutable std::mutex m_EntriesMutex;
     std::vector<SearchRenderEntry> m_RenderEntries;
 #endif

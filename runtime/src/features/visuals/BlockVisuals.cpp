@@ -27,6 +27,89 @@ namespace {
     std::mutex g_BlockDescriptorCacheMutex;
     std::unordered_map<int, BlockVisuals::BlockDescriptor> g_BlockDescriptorCache;
 
+    // Cached JNI method IDs for GetBlockObjectAt — initialized once, reused on every call.
+    std::mutex g_BlockGetterCacheMutex;
+    bool g_BlockGetterCacheReady = false;
+    jclass g_CachedBlockPosClass = nullptr;
+    jmethodID g_CachedBlockPosCtor = nullptr;
+    jmethodID g_CachedGetBlockStateMethod = nullptr;
+    jmethodID g_CachedGetBlockMethod = nullptr;
+
+    bool TryInitBlockGetterCache(JNIEnv* env, jobject worldObject) {
+        if (!env || !worldObject || !g_Game || !g_Game->IsInitialized()) {
+            return false;
+        }
+
+        const std::string blockPosClassName  = Mapper::Get("net/minecraft/util/BlockPos");
+        const std::string blockPosSig        = Mapper::Get("net/minecraft/util/BlockPos", 2);
+        const std::string blockStateSig      = Mapper::Get("net/minecraft/block/state/IBlockState", 2);
+        const std::string blockSig           = Mapper::Get("net/minecraft/block/Block", 2);
+        const std::string getBlockStateName  = Mapper::Get("getBlockState");
+        const std::string getBlockName       = Mapper::Get("getBlock");
+
+        if (blockPosClassName.empty() || blockPosSig.empty() || blockStateSig.empty() ||
+            blockSig.empty() || getBlockStateName.empty() || getBlockName.empty()) {
+            return false;
+        }
+
+        jclass bpClass = reinterpret_cast<jclass>(g_Game->FindClass(blockPosClassName));
+        if (!bpClass) {
+            return false;
+        }
+
+        jmethodID bpCtor = env->GetMethodID(bpClass, "<init>", "(III)V");
+        if (!bpCtor || env->ExceptionCheck()) {
+            ClearJniException(env);
+            return false;
+        }
+
+        jclass worldClass = env->GetObjectClass(worldObject);
+        if (!worldClass) {
+            return false;
+        }
+        const std::string getBlockStateSig = "(" + blockPosSig + ")" + blockStateSig;
+        jmethodID getBlockStateMethod = env->GetMethodID(worldClass, getBlockStateName.c_str(), getBlockStateSig.c_str());
+        env->DeleteLocalRef(worldClass);
+        if (!getBlockStateMethod || env->ExceptionCheck()) {
+            ClearJniException(env);
+            return false;
+        }
+
+        jobject dummyPos = env->NewObject(bpClass, bpCtor, (jint)0, (jint)64, (jint)0);
+        if (!dummyPos || env->ExceptionCheck()) {
+            ClearJniException(env);
+            if (dummyPos) env->DeleteLocalRef(dummyPos);
+            return false;
+        }
+        jobject dummyState = env->CallObjectMethod(worldObject, getBlockStateMethod, dummyPos);
+        env->DeleteLocalRef(dummyPos);
+        if (!dummyState || env->ExceptionCheck()) {
+            ClearJniException(env);
+            if (dummyState) env->DeleteLocalRef(dummyState);
+            return false;
+        }
+
+        jclass stateClass = env->GetObjectClass(dummyState);
+        env->DeleteLocalRef(dummyState);
+        if (!stateClass) {
+            return false;
+        }
+        const std::string getBlockSig = "()" + blockSig;
+        jmethodID getBlockMethod = env->GetMethodID(stateClass, getBlockName.c_str(), getBlockSig.c_str());
+        env->DeleteLocalRef(stateClass);
+        if (!getBlockMethod || env->ExceptionCheck()) {
+            ClearJniException(env);
+            return false;
+        }
+
+        g_CachedBlockPosClass       = bpClass;
+        g_CachedBlockPosCtor        = bpCtor;
+        g_CachedGetBlockStateMethod = getBlockStateMethod;
+        g_CachedGetBlockMethod      = getBlockMethod;
+        g_BlockGetterCacheReady     = true;
+        return true;
+    }
+
     void ClearJniException(JNIEnv* env) {
         if (env && env->ExceptionCheck()) {
             env->ExceptionClear();
@@ -445,77 +528,36 @@ jobject BlockVisuals::GetBlockObjectAt(JNIEnv* env, jobject worldObject, int x, 
         return nullptr;
     }
 
-    const std::string blockPosClassName = Mapper::Get("net/minecraft/util/BlockPos");
-    const std::string blockPosSignature = Mapper::Get("net/minecraft/util/BlockPos", 2);
-    const std::string blockStateSignature = Mapper::Get("net/minecraft/block/state/IBlockState", 2);
-    const std::string blockSignature = Mapper::Get("net/minecraft/block/Block", 2);
-    if (blockPosClassName.empty() || blockPosSignature.empty() ||
-        blockStateSignature.empty() || blockSignature.empty()) {
-        return nullptr;
+    if (!g_BlockGetterCacheReady) {
+        std::lock_guard<std::mutex> lock(g_BlockGetterCacheMutex);
+        if (!g_BlockGetterCacheReady) {
+            if (!TryInitBlockGetterCache(env, worldObject)) {
+                return nullptr;
+            }
+        }
     }
 
-    jclass blockPosClass = reinterpret_cast<jclass>(g_Game->FindClass(blockPosClassName));
-    if (!blockPosClass) {
-        return nullptr;
-    }
-
-    jmethodID blockPosCtor = env->GetMethodID(blockPosClass, "<init>", "(III)V");
-    if (!blockPosCtor || env->ExceptionCheck()) {
-        ClearJniException(env);
-        return nullptr;
-    }
-
-    jobject blockPos = env->NewObject(blockPosClass, blockPosCtor, static_cast<jint>(x), static_cast<jint>(y), static_cast<jint>(z));
+    jobject blockPos = env->NewObject(g_CachedBlockPosClass, g_CachedBlockPosCtor,
+                                      static_cast<jint>(x), static_cast<jint>(y), static_cast<jint>(z));
     if (!blockPos || env->ExceptionCheck()) {
         ClearJniException(env);
-        if (blockPos) {
-            env->DeleteLocalRef(blockPos);
-        }
+        if (blockPos) env->DeleteLocalRef(blockPos);
         return nullptr;
     }
 
-    auto* worldClass = reinterpret_cast<Class*>(env->GetObjectClass(worldObject));
-    if (!worldClass) {
-        env->DeleteLocalRef(blockPos);
-        return nullptr;
-    }
-
-    const std::string getBlockStateName = Mapper::Get("getBlockState");
-    const std::string getBlockStateSignature = "(" + blockPosSignature + ")" + blockStateSignature;
-    Method* getBlockStateMethod = getBlockStateName.empty()
-        ? nullptr
-        : worldClass->GetMethod(env, getBlockStateName.c_str(), getBlockStateSignature.c_str());
-    jobject blockState = getBlockStateMethod ? getBlockStateMethod->CallObjectMethod(env, worldObject, false, blockPos) : nullptr;
-    env->DeleteLocalRef(reinterpret_cast<jclass>(worldClass));
+    jobject blockState = env->CallObjectMethod(worldObject, g_CachedGetBlockStateMethod, blockPos);
     env->DeleteLocalRef(blockPos);
     if (!blockState || env->ExceptionCheck()) {
         ClearJniException(env);
-        if (blockState) {
-            env->DeleteLocalRef(blockState);
-        }
+        if (blockState) env->DeleteLocalRef(blockState);
         return nullptr;
     }
 
-    auto* blockStateClass = reinterpret_cast<Class*>(env->GetObjectClass(blockState));
-    if (!blockStateClass) {
-        env->DeleteLocalRef(blockState);
-        return nullptr;
-    }
-
-    const std::string getBlockName = Mapper::Get("getBlock");
-    const std::string getBlockSignature = "()" + blockSignature;
-    Method* getBlockMethod = getBlockName.empty()
-        ? nullptr
-        : blockStateClass->GetMethod(env, getBlockName.c_str(), getBlockSignature.c_str());
-    jobject block = getBlockMethod ? getBlockMethod->CallObjectMethod(env, blockState) : nullptr;
-    env->DeleteLocalRef(reinterpret_cast<jclass>(blockStateClass));
+    jobject block = env->CallObjectMethod(blockState, g_CachedGetBlockMethod);
     env->DeleteLocalRef(blockState);
-
     if (env->ExceptionCheck()) {
         ClearJniException(env);
-        if (block) {
-            env->DeleteLocalRef(block);
-        }
+        if (block) env->DeleteLocalRef(block);
         return nullptr;
     }
 

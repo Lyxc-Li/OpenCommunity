@@ -59,6 +59,8 @@ public:
     void RenderOverlay(ImDrawList* drawList, float screenW, float screenH) override;
 
 private:
+    void RunScan(int range);
+
     struct DefenseChip {
         std::string label;
         int count = 0;
@@ -76,6 +78,7 @@ private:
         std::vector<DefenseChip> chips;
     };
 
+    std::atomic<bool> m_ScanRunning{false};
     mutable std::mutex m_EntriesMutex;
     std::vector<BedPlateEntry> m_RenderEntries;
 #endif
