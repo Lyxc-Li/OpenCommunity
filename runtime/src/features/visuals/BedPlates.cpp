@@ -651,11 +651,15 @@ void BedPlates::RenderOverlay(ImDrawList* drawList, float screenW, float screenH
     const float* color = GetColor();
     glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
                  GL_LINE_BIT | GL_POLYGON_BIT | GL_TEXTURE_BIT | GL_LIGHTING_BIT);
+
+    // Save without pushing — projection stack min-depth is 2, pushing risks overflow
+    GLfloat savedWireProj[16], savedWireMV[16];
+    glGetFloatv(GL_PROJECTION_MATRIX, savedWireProj);
+    glGetFloatv(GL_MODELVIEW_MATRIX,  savedWireMV);
+
     glMatrixMode(GL_PROJECTION);
-    glPushMatrix();
     glLoadMatrixf(snapshot.projection.data());
     glMatrixMode(GL_MODELVIEW);
-    glPushMatrix();
     glLoadMatrixf(snapshot.modelView.data());
 
     glEnable(GL_BLEND);
@@ -685,9 +689,9 @@ void BedPlates::RenderOverlay(ImDrawList* drawList, float screenW, float screenH
     glDisable(GL_BLEND);
 
     glMatrixMode(GL_PROJECTION);
-    glPopMatrix();
+    glLoadMatrixf(savedWireProj);
     glMatrixMode(GL_MODELVIEW);
-    glPopMatrix();
+    glLoadMatrixf(savedWireMV);
     glPopAttrib();
 
     // ── ImGui plate pass ─────────────────────────────────────────────────────
