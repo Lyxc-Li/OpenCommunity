@@ -533,8 +533,9 @@ void BedPlates::BlockIconCallback(const ImDrawList* /*drawList*/, const ImDrawCm
     glGetIntegerv(GL_VIEWPORT, viewport);
 
     glPushAttrib(GL_ALL_ATTRIB_BITS);
+    GLfloat savedProj[16];
+    glGetFloatv(GL_PROJECTION_MATRIX, savedProj);
     glMatrixMode(GL_PROJECTION);
-    glPushMatrix();
     glLoadIdentity();
     glOrtho(0.0, static_cast<double>(viewport[2]), static_cast<double>(viewport[3]),
             0.0, -1000.0, 1000.0);
@@ -559,11 +560,26 @@ void BedPlates::BlockIconCallback(const ImDrawList* /*drawList*/, const ImDrawCm
             if (!stack) continue;
 
             const float mcScale = draw.size / 16.0f;
+            GLint projBefore, mvBefore;
+            glGetIntegerv(GL_PROJECTION_STACK_DEPTH, &projBefore);
+            glGetIntegerv(GL_MODELVIEW_STACK_DEPTH,  &mvBefore);
+
+            glMatrixMode(GL_MODELVIEW);
             glPushMatrix();
             glTranslatef(draw.x, draw.y, 0.0f);
             glScalef(mcScale, mcScale, 1.0f);
             renderItem->RenderItemIntoGUI(stack, 0, 0, env);
-            glPopMatrix();
+
+            GLint projAfter, mvAfter;
+            glGetIntegerv(GL_PROJECTION_STACK_DEPTH, &projAfter);
+            glGetIntegerv(GL_MODELVIEW_STACK_DEPTH,  &mvAfter);
+
+            if (projAfter > projBefore) {
+                glMatrixMode(GL_PROJECTION);
+                for (GLint i = projAfter; i > projBefore; --i) glPopMatrix();
+            }
+            glMatrixMode(GL_MODELVIEW);
+            for (GLint i = mvAfter; i > mvBefore; --i) glPopMatrix();
 
             env->DeleteLocalRef(stack);
         }
@@ -573,7 +589,7 @@ void BedPlates::BlockIconCallback(const ImDrawList* /*drawList*/, const ImDrawCm
     RenderHelper::DisableStandardItemLighting(env);
 
     glMatrixMode(GL_PROJECTION);
-    glPopMatrix();
+    glLoadMatrixf(savedProj);
     glMatrixMode(GL_MODELVIEW);
     glPopMatrix();
     glPopAttrib();
