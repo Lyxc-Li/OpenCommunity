@@ -72,6 +72,39 @@ namespace {
         RenderCache::projection = projection;
         RenderCache::viewportW = viewportWidth;
         RenderCache::viewportH = viewportHeight;
+        RenderCache::captured = true;
+    }
+
+    bool TryCaptureMatricesFromOpenGlState(const GLint viewport[4]) {
+        if (viewport[2] <= 0 || viewport[3] <= 0) {
+            return false;
+        }
+
+        GLfloat rawModelView[16] = {};
+        GLfloat rawProjection[16] = {};
+        glGetFloatv(GL_MODELVIEW_MATRIX, rawModelView);
+        glGetFloatv(GL_PROJECTION_MATRIX, rawProjection);
+
+        std::vector<float> modelView(16, 0.0f);
+        std::vector<float> projection(16, 0.0f);
+        for (size_t index = 0; index < 16; ++index) {
+            modelView[index] = rawModelView[index];
+            projection[index] = rawProjection[index];
+            if (!std::isfinite(modelView[index]) || !std::isfinite(projection[index])) {
+                return false;
+            }
+        }
+
+        if (std::fabs(projection[11]) < 0.5f) {
+            return false;
+        }
+
+        StoreRenderMatrices(
+            modelView,
+            projection,
+            viewport[2],
+            viewport[3]);
+        return true;
     }
 
     void BuildPerspective(float fovDegrees, float aspect, float zNear, float zFar, std::vector<float>& out) {
@@ -304,6 +337,10 @@ namespace {
             return false;
         }
 
+        if (TryCaptureMatricesFromOpenGlState(viewport)) {
+            return true;
+        }
+
         JNIEnv* env = g_Game->GetCurrentEnv();
         if (!env) {
             return false;
@@ -311,27 +348,11 @@ namespace {
 
         if (env->ExceptionCheck()) env->ExceptionClear();
 
-        const bool thirdPersonActive = Minecraft::GetThirdPersonView(env) != 0;
-        if (env->ExceptionCheck()) env->ExceptionClear();
-
-        const auto gameVersion = g_Game->GetGameVersion();
-        const bool preferCameraState =
-            (gameVersion == GameVersions::LUNAR && !thirdPersonActive) ||
-            (gameVersion == GameVersions::BADLION && thirdPersonActive);
-
-        if (preferCameraState) {
-            if (TryCaptureMatricesFromCameraState(env, viewport)) {
-                return true;
-            }
-
-            return TryCaptureMatricesFromActiveRenderInfo(env, viewport);
-        }
-
-        if (TryCaptureMatricesFromActiveRenderInfo(env, viewport)) {
+        if (TryCaptureMatricesFromCameraState(env, viewport)) {
             return true;
         }
 
-        return TryCaptureMatricesFromCameraState(env, viewport);
+        return TryCaptureMatricesFromActiveRenderInfo(env, viewport);
     }
 
     std::filesystem::path FindOverlayFontPath() {

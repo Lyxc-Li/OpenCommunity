@@ -14,6 +14,10 @@
 #include "visuals/EnemyInfoList.h"
 #include "visuals/Notifications.h"
 #include "visuals/ItemChams.h"
+#include "visuals/PlayerChams.h"
+#include "visuals/PlayerESP.h"
+#include "visuals/BedPlates.h"
+#include "visuals/Search.h"
 #include "visuals/NoRender.h"
 #include "visuals/Target.h"
 #include "visuals/HideClans.h"
@@ -36,6 +40,10 @@ namespace ModuleRegistry {
         modules.RegisterModule(std::make_shared<EnemyInfoList>());
         modules.RegisterModule(std::make_shared<Notifications>());
         modules.RegisterModule(std::make_shared<ItemChams>());
+        modules.RegisterModule(std::make_shared<PlayerChams>());
+        modules.RegisterModule(std::make_shared<PlayerESP>());
+        modules.RegisterModule(std::make_shared<BedPlates>());
+        modules.RegisterModule(std::make_shared<Search>());
         modules.RegisterModule(std::make_shared<NoRender>());
     }
 

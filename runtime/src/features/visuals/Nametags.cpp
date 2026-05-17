@@ -1,78 +1,39 @@
 #include "pch.h"
 #include "Nametags.h"
 
+#include "BlockVisuals.h"
 #include "Target.h"
+
 #include "../../core/Bridge.h"
-#include "../../core/RenderHook.h"
+#include "../../game/classes/ItemStack.h"
 #include "../../game/classes/Minecraft.h"
+#include "../../game/classes/Player.h"
 #include "../../game/classes/Scoreboard.h"
-#include "../../game/classes/Team.h"
 #include "../../game/classes/Timer.h"
 #include "../../game/classes/World.h"
+#include "../../game/jni/Class.h"
 #include "../../game/jni/GameInstance.h"
+#include "../../game/jni/Method.h"
 #include "../../game/mapping/Mapper.h"
 
 #include <algorithm>
 #include <array>
-#include <cfloat>
-#include <chrono>
+#include <cctype>
 #include <cmath>
+#include <cfloat>
 #include <cstdio>
-#include <mutex>
-#include <set>
-#include <unordered_map>
+#include <string>
 #include <unordered_set>
 #include <vector>
 
 namespace {
-    constexpr float kNametagAnchorVerticalOffset = 0.35f;
-    constexpr float kNametagHorizontalPadding = 9.0f;
-    constexpr float kNametagVerticalPadding = 6.0f;
-    constexpr float kNametagCornerRounding = 7.0f;
-    constexpr float kNametagBaseFontSize = 15.5f;
-    constexpr float kNametagSegmentSpacing = 5.0f;
-    constexpr float kNametagShadowOffset = 1.0f;
-    constexpr float kHeartVerticalOffset = 3.25f;
-    constexpr float kMinimumNametagScale = 0.72f;
-    constexpr float kMaximumNametagScale = 1.08f;
-    constexpr float kNametagTopOffset = 4.0f;
+    constexpr float kBaseFontSize = 15.0f;
+    constexpr float kEquipmentFontSize = 11.5f;
+    constexpr float kShadowOffset = 1.0f;
+    constexpr float kBarWidth = 28.0f;
+    constexpr float kBarHeight = 2.5f;
     constexpr float kMaximumRenderableDistance = 255.0f;
-    constexpr const char* kHiddenNametagTeamName = "__oc_nametags_hidden";
-    constexpr float kScaleSmoothingStrength = 14.0f;
-    constexpr auto kSmoothingResetDelay = std::chrono::milliseconds(450);
-    constexpr auto kHealthCacheRefreshInterval = std::chrono::milliseconds(90);
-
-    struct ScreenPoint {
-        float x = 0.0f;
-        float y = 0.0f;
-    };
-
-    struct WorldPoint {
-        float x = 0.0f;
-        float y = 0.0f;
-        float z = 0.0f;
-    };
-
-    struct ClipPoint {
-        float x = 0.0f;
-        float y = 0.0f;
-        float z = 0.0f;
-        float w = 0.0f;
-    };
-
-    struct RenderMatrixSnapshot {
-        std::vector<float> modelView;
-        std::vector<float> projection;
-        int viewportWidth = 0;
-        int viewportHeight = 0;
-
-        bool IsValid() const {
-            return modelView.size() == 16 &&
-                projection.size() == 16 &&
-                viewportWidth > 0 &&
-                viewportHeight > 0;
-        }
-    };
+    constexpr float kAnchorVerticalOffset = 0.2f;
 
     struct ProjectedNametagBox {
         float minX = 0.0f;
@@ -81,93 +42,92 @@ namespace {
         float maxY = 0.0f;
     };
 
-    struct NametagRenderEntry {
+    struct ColoredTextPart {
+        std::string text;
+        ImU32 color = IM_COL32_WHITE;
+    };
+
+    struct NametagEntry {
         std::string name;
-        float realHealth = 0.0f;
+        std::string equipment;
+        float health = 0.0f;
         float maxHealth = 20.0f;
+        float absorption = 0.0f;
         float distance = 0.0f;
-        ScreenPoint anchor;
-        float scale = 1.0f;
+        float width = 0.6f;
+        float height = 1.8f;
+        Vec3D currentPos{};
+        Vec3D lastPos{};
+        bool isPlayer = false;
     };
 
-    struct SmoothedNametagState {
-        ScreenPoint anchor;
-        float scale = 1.0f;
-        std::chrono::steady_clock::time_point lastUpdate = std::chrono::steady_clock::now();
-    };
-
-    struct CachedNametagStats {
-        float realHealth = 0.0f;
-        float maxHealth = 20.0f;
-        std::chrono::steady_clock::time_point lastUpdate = std::chrono::steady_clock::now();
-    };
-
-    std::mutex g_NametagStateMutex;
-    std::unordered_map<std::string, jobject> g_OriginalTeamVisibilityRefs;
-    std::unordered_set<std::string> g_InjectedPlayers;
-    std::unordered_map<std::string, SmoothedNametagState> g_SmoothedNametags;
-    std::unordered_map<std::string, CachedNametagStats> g_CachedNametagStats;
-    std::chrono::steady_clock::time_point g_LastHealthCacheRefresh = std::chrono::steady_clock::time_point::min();
-    std::chrono::steady_clock::time_point g_LastVanillaHideRefresh = std::chrono::steady_clock::time_point::min();
-
-    float Clamp01(float value) {
-        return (std::max)(0.0f, (std::min)(1.0f, value));
+    void ClearJniException(JNIEnv* env) {
+        if (env && env->ExceptionCheck()) {
+            env->ExceptionClear();
+        }
     }
 
-    ClipPoint MultiplyMatrixVector(const ClipPoint& vec, const std::vector<float>& mat) {
-        if (mat.size() != 16) {
-            return {};
+    bool IsInstanceOfMapped(JNIEnv* env, jobject object, const char* mappingKey) {
+        if (!env || !object || !g_Game || !g_Game->IsInitialized() || !mappingKey) {
+            return false;
         }
 
-        return {
-            vec.x * mat[0] + vec.y * mat[4] + vec.z * mat[8] + vec.w * mat[12],
-            vec.x * mat[1] + vec.y * mat[5] + vec.z * mat[9] + vec.w * mat[13],
-            vec.x * mat[2] + vec.y * mat[6] + vec.z * mat[10] + vec.w * mat[14],
-            vec.x * mat[3] + vec.y * mat[7] + vec.z * mat[11] + vec.w * mat[15]
-        };
+        const std::string className = Mapper::Get(mappingKey);
+        if (className.empty()) {
+            return false;
+        }
+
+        jclass mappedClass = reinterpret_cast<jclass>(g_Game->FindClass(className));
+        return mappedClass && env->IsInstanceOf(object, mappedClass) == JNI_TRUE;
     }
 
-    RenderMatrixSnapshot CaptureRenderMatrixSnapshot() {
-        std::lock_guard<std::mutex> lock(RenderCache::mtx);
-        return {
-            RenderCache::modelView,
-            RenderCache::projection,
-            RenderCache::viewportW,
-            RenderCache::viewportH
-        };
+    bool HasZeroedBoundingBox(Player* entity, JNIEnv* env) {
+        return !entity || !env || entity->HasZeroedBoundingBox(env);
     }
 
-    bool TryProjectPoint(const WorldPoint& worldPoint, const RenderMatrixSnapshot& snapshot, ScreenPoint& screenPoint) {
-        if (!snapshot.IsValid()) {
+    float ResolveNametagHealth(Player* player, JNIEnv* env) {
+        if (!player || !env) {
+            return -1.0f;
+        }
+
+        float realHealth = player->GetRealHealth(env);
+        if (!std::isfinite(realHealth) || realHealth <= 0.0f) {
+            realHealth = player->GetHealth(env);
+        }
+
+        return std::isfinite(realHealth) ? realHealth : -1.0f;
+    }
+
+    bool TryGetAbsorptionAmount(Player* player, JNIEnv* env, float& amount) {
+        amount = 0.0f;
+        if (!player || !env) {
             return false;
         }
 
-        const ClipPoint clipPoint = MultiplyMatrixVector(
-            MultiplyMatrixVector({ worldPoint.x, worldPoint.y, worldPoint.z, 1.0f }, snapshot.modelView),
-            snapshot.projection);
-        if (!std::isfinite(clipPoint.x) || !std::isfinite(clipPoint.y) ||
-            !std::isfinite(clipPoint.z) || !std::isfinite(clipPoint.w)) {
+        auto* playerClass = reinterpret_cast<Class*>(env->GetObjectClass(reinterpret_cast<jobject>(player)));
+        if (!playerClass) {
             return false;
         }
 
-        if (std::fabs(clipPoint.w) < 0.0001f) {
+        Method* method = playerClass->GetMethod(env, "getAbsorptionAmount", "()F");
+        if (!method) {
+            method = playerClass->GetMethod(env, "func_110139_bj", "()F");
+        }
+
+        amount = method ? method->CallFloatMethod(env, player) : 0.0f;
+        env->DeleteLocalRef(reinterpret_cast<jclass>(playerClass));
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+            amount = 0.0f;
             return false;
         }
 
-        const float ndcX = clipPoint.x / clipPoint.w;
-        const float ndcY = clipPoint.y / clipPoint.w;
-        const float ndcZ = clipPoint.z / clipPoint.w;
-        if (!std::isfinite(ndcX) || !std::isfinite(ndcY) || !std::isfinite(ndcZ)) {
+        if (!std::isfinite(amount) || amount < 0.0f) {
+            amount = 0.0f;
             return false;
         }
 
-        if (ndcZ < -1.0f || ndcZ > 1.0f) {
-            return false;
-        }
-
-        screenPoint.x = snapshot.viewportWidth * ((ndcX + 1.0f) * 0.5f);
-        screenPoint.y = snapshot.viewportHeight * ((1.0f - ndcY) * 0.5f);
-        return std::isfinite(screenPoint.x) && std::isfinite(screenPoint.y);
+        return amount > 0.0f;
     }
 
     bool TryBuildProjectedNametagBox(
@@ -176,20 +136,17 @@ namespace {
         double entityZ,
         float entityWidth,
         float entityHeight,
-        const RenderMatrixSnapshot& snapshot,
+        const BlockVisuals::RenderMatrixSnapshot& snapshot,
         ProjectedNametagBox& projectedBox) {
-        if (!snapshot.IsValid()) {
-            return false;
-        }
-
-        if (!std::isfinite(entityX) || !std::isfinite(entityY) || !std::isfinite(entityZ) ||
+        if (!snapshot.IsValid() ||
+            !std::isfinite(entityX) || !std::isfinite(entityY) || !std::isfinite(entityZ) ||
             !std::isfinite(entityWidth) || !std::isfinite(entityHeight) ||
             entityWidth <= 0.05f || entityHeight <= 0.05f) {
             return false;
         }
 
         const float halfWidth = entityWidth * 0.5f;
-        const std::array<WorldPoint, 8> corners = {{
+        const std::array<BlockVisuals::WorldPoint, 8> corners = {{
             { static_cast<float>(entityX - halfWidth), static_cast<float>(entityY),                static_cast<float>(entityZ - halfWidth) },
             { static_cast<float>(entityX + halfWidth), static_cast<float>(entityY),                static_cast<float>(entityZ - halfWidth) },
             { static_cast<float>(entityX + halfWidth), static_cast<float>(entityY),                static_cast<float>(entityZ + halfWidth) },
@@ -207,8 +164,8 @@ namespace {
         float maxY = -FLT_MAX;
 
         for (const auto& corner : corners) {
-            ScreenPoint projectedCorner;
-            if (!TryProjectPoint(corner, snapshot, projectedCorner)) {
+            BlockVisuals::ScreenPoint projectedCorner;
+            if (!BlockVisuals::TryProjectPoint(corner, snapshot, projectedCorner)) {
                 continue;
             }
 
@@ -219,10 +176,7 @@ namespace {
             ++visibleCorners;
         }
 
-        if (visibleCorners == 0 ||
-            !std::isfinite(minX) || !std::isfinite(minY) ||
-            !std::isfinite(maxX) || !std::isfinite(maxY) ||
-            maxX <= minX || maxY <= minY) {
+        if (visibleCorners == 0 || maxX <= minX || maxY <= minY) {
             return false;
         }
 
@@ -231,341 +185,6 @@ namespace {
         projectedBox.maxX = maxX;
         projectedBox.maxY = maxY;
         return true;
-    }
-
-    float ComputeHealthRatio(float realHealth, float maxHealth) {
-        float safeMaxHealth = maxHealth;
-        if (safeMaxHealth <= 0.0f) {
-            safeMaxHealth = (std::max)(20.0f, realHealth);
-        }
-        if (realHealth > safeMaxHealth) {
-            safeMaxHealth = realHealth;
-        }
-
-        return Clamp01(realHealth / safeMaxHealth);
-    }
-
-    ImU32 BuildHealthColor(float realHealth, float maxHealth) {
-        const float ratio = ComputeHealthRatio(realHealth, maxHealth);
-        if (ratio >= 0.70f) {
-            return IM_COL32(101, 214, 114, 255);
-        }
-        if (ratio >= 0.45f) {
-            return IM_COL32(255, 213, 92, 255);
-        }
-        if (ratio >= 0.20f) {
-            return IM_COL32(255, 160, 80, 255);
-        }
-        return IM_COL32(255, 96, 96, 255);
-    }
-
-    float ComputeNametagScale(float distance) {
-        const float scaled = 1.05f - (distance * 0.0125f);
-        return (std::max)(kMinimumNametagScale, (std::min)(kMaximumNametagScale, scaled));
-    }
-
-    jobject GetNeverVisibilityEnum(JNIEnv* env) {
-        if (!env || !g_Game || !g_Game->IsInitialized()) {
-            return nullptr;
-        }
-
-        const std::string enumClassName = Mapper::Get("net/minecraft/scoreboard/Team$EnumVisible");
-        const std::string visibilitySignature = Mapper::Get("net/minecraft/scoreboard/Team$EnumVisible", 2);
-        if (enumClassName.empty() || visibilitySignature.empty()) {
-            return nullptr;
-        }
-
-        jclass enumClass = reinterpret_cast<jclass>(g_Game->FindClass(enumClassName));
-        if (!enumClass) {
-            return nullptr;
-        }
-
-        const std::string methodName = Mapper::Get("getEnumVisibleByName");
-        if (!methodName.empty()) {
-            const std::string signature = "(Ljava/lang/String;)" + visibilitySignature;
-            jmethodID byNameMethod = env->GetStaticMethodID(enumClass, methodName.c_str(), signature.c_str());
-            if (byNameMethod) {
-                jstring neverString = env->NewStringUTF("never");
-                jobject visibility = neverString ? env->CallStaticObjectMethod(enumClass, byNameMethod, neverString) : nullptr;
-                if (neverString) {
-                    env->DeleteLocalRef(neverString);
-                }
-                if (env->ExceptionCheck()) {
-                    env->ExceptionClear();
-                } else if (visibility) {
-                    return visibility;
-                }
-            } else if (env->ExceptionCheck()) {
-                env->ExceptionClear();
-            }
-        }
-
-        const std::string valuesSignature = "()" + std::string("[") + visibilitySignature;
-        jmethodID valuesMethod = env->GetStaticMethodID(enumClass, "values", valuesSignature.c_str());
-        if (!valuesMethod) {
-            if (env->ExceptionCheck()) {
-                env->ExceptionClear();
-            }
-            return nullptr;
-        }
-
-        jobjectArray values = static_cast<jobjectArray>(env->CallStaticObjectMethod(enumClass, valuesMethod));
-        if (env->ExceptionCheck()) {
-            env->ExceptionClear();
-            if (values) {
-                env->DeleteLocalRef(values);
-            }
-            return nullptr;
-        }
-
-        if (!values) {
-            return nullptr;
-        }
-
-        jmethodID nameMethod = env->GetMethodID(enumClass, "name", "()Ljava/lang/String;");
-        if (!nameMethod) {
-            if (env->ExceptionCheck()) {
-                env->ExceptionClear();
-            }
-            env->DeleteLocalRef(values);
-            return nullptr;
-        }
-
-        const jsize enumCount = env->GetArrayLength(values);
-        for (jsize index = 0; index < enumCount; ++index) {
-            jobject value = env->GetObjectArrayElement(values, index);
-            if (!value) {
-                continue;
-            }
-
-            jstring nameObject = static_cast<jstring>(env->CallObjectMethod(value, nameMethod));
-            if (env->ExceptionCheck()) {
-                env->ExceptionClear();
-                if (nameObject) {
-                    env->DeleteLocalRef(nameObject);
-                }
-                env->DeleteLocalRef(value);
-                continue;
-            }
-
-            std::string enumName;
-            if (nameObject) {
-                const char* chars = env->GetStringUTFChars(nameObject, nullptr);
-                if (chars) {
-                    enumName = chars;
-                    env->ReleaseStringUTFChars(nameObject, chars);
-                }
-                env->DeleteLocalRef(nameObject);
-            }
-
-            std::transform(enumName.begin(), enumName.end(), enumName.begin(), [](unsigned char ch) {
-                return static_cast<char>(std::tolower(ch));
-            });
-
-            if (enumName == "never") {
-                env->DeleteLocalRef(values);
-                return value;
-            }
-
-            env->DeleteLocalRef(value);
-        }
-
-        env->DeleteLocalRef(values);
-        return nullptr;
-    }
-
-    void DeleteStoredVisibilityRefs(JNIEnv* env) {
-        std::lock_guard<std::mutex> lock(g_NametagStateMutex);
-        for (auto& [teamName, visibilityRef] : g_OriginalTeamVisibilityRefs) {
-            if (visibilityRef) {
-                env->DeleteGlobalRef(visibilityRef);
-            }
-        }
-        g_OriginalTeamVisibilityRefs.clear();
-    }
-
-    void ResetNametagSmoothing() {
-        std::lock_guard<std::mutex> lock(g_NametagStateMutex);
-        g_SmoothedNametags.clear();
-    }
-
-    void RestoreVanillaNameTags(JNIEnv* env, Scoreboard* scoreboard) {
-        if (!env) {
-            return;
-        }
-
-        {
-            std::lock_guard<std::mutex> lock(g_NametagStateMutex);
-            if (scoreboard) {
-                for (const auto& [teamName, visibilityRef] : g_OriginalTeamVisibilityRefs) {
-                    if (teamName.empty() || !visibilityRef) {
-                        continue;
-                    }
-
-                    jobject teamObject = scoreboard->GetTeam(env, teamName);
-                    if (!teamObject) {
-                        continue;
-                    }
-
-                    reinterpret_cast<Team*>(teamObject)->SetNameTagVisibility(env, visibilityRef);
-                    env->DeleteLocalRef(teamObject);
-                }
-
-                for (const auto& playerName : g_InjectedPlayers) {
-                    if (!playerName.empty()) {
-                        scoreboard->RemovePlayerFromTeams(env, playerName);
-                    }
-                }
-
-                jobject hiddenTeamObject = scoreboard->GetTeam(env, kHiddenNametagTeamName);
-                if (hiddenTeamObject) {
-                    scoreboard->RemoveTeam(env, hiddenTeamObject);
-                    env->DeleteLocalRef(hiddenTeamObject);
-                }
-            }
-
-            for (auto& [teamName, visibilityRef] : g_OriginalTeamVisibilityRefs) {
-                if (visibilityRef) {
-                    env->DeleteGlobalRef(visibilityRef);
-                }
-            }
-            g_OriginalTeamVisibilityRefs.clear();
-            g_InjectedPlayers.clear();
-            g_SmoothedNametags.clear();
-            g_CachedNametagStats.clear();
-            g_LastHealthCacheRefresh = std::chrono::steady_clock::time_point::min();
-            g_LastVanillaHideRefresh = std::chrono::steady_clock::time_point::min();
-        }
-    }
-
-    void EnsureTeamNameHidden(JNIEnv* env, Scoreboard* scoreboard, const std::string& teamName, Team* team, jobject neverVisibility, std::set<std::string>& activeTeamNames) {
-        if (!env || !scoreboard || !team || !neverVisibility || teamName.empty()) {
-            return;
-        }
-
-        activeTeamNames.insert(teamName);
-
-        {
-            std::lock_guard<std::mutex> lock(g_NametagStateMutex);
-            if (g_OriginalTeamVisibilityRefs.find(teamName) == g_OriginalTeamVisibilityRefs.end()) {
-                jobject originalVisibility = team->GetNameTagVisibility(env);
-                if (originalVisibility) {
-                    g_OriginalTeamVisibilityRefs.emplace(teamName, env->NewGlobalRef(originalVisibility));
-                    env->DeleteLocalRef(originalVisibility);
-                }
-            }
-        }
-
-        team->SetNameTagVisibility(env, neverVisibility);
-    }
-
-    void CleanupInactiveTeamOverrides(JNIEnv* env, Scoreboard* scoreboard, const std::set<std::string>& activeTeamNames) {
-        if (!env || !scoreboard) {
-            return;
-        }
-
-        std::vector<std::pair<std::string, jobject>> teamsToRestore;
-        {
-            std::lock_guard<std::mutex> lock(g_NametagStateMutex);
-            for (auto it = g_OriginalTeamVisibilityRefs.begin(); it != g_OriginalTeamVisibilityRefs.end();) {
-                if (activeTeamNames.count(it->first) > 0) {
-                    ++it;
-                    continue;
-                }
-
-                teamsToRestore.emplace_back(it->first, it->second);
-                it = g_OriginalTeamVisibilityRefs.erase(it);
-            }
-        }
-
-        for (auto& [teamName, visibilityRef] : teamsToRestore) {
-            if (!visibilityRef || teamName.empty()) {
-                continue;
-            }
-
-            jobject teamObject = scoreboard->GetTeam(env, teamName);
-            if (teamObject) {
-                reinterpret_cast<Team*>(teamObject)->SetNameTagVisibility(env, visibilityRef);
-                env->DeleteLocalRef(teamObject);
-            }
-
-            env->DeleteGlobalRef(visibilityRef);
-        }
-    }
-
-    std::pair<ScreenPoint, float> SmoothNametagState(const std::string& name, const ScreenPoint& targetAnchor, float targetScale) {
-        const auto now = std::chrono::steady_clock::now();
-
-        std::lock_guard<std::mutex> lock(g_NametagStateMutex);
-        auto& state = g_SmoothedNametags[name];
-        const auto elapsed = now - state.lastUpdate;
-        if (elapsed > kSmoothingResetDelay) {
-            state.anchor = targetAnchor;
-            state.scale = targetScale;
-            state.lastUpdate = now;
-            return { state.anchor, state.scale };
-        }
-
-        const float deltaSeconds = (std::max)(0.0f, std::chrono::duration<float>(elapsed).count());
-        const float scaleBlend = 1.0f - std::exp(-kScaleSmoothingStrength * deltaSeconds);
-        state.anchor = targetAnchor;
-        state.scale += (targetScale - state.scale) * scaleBlend;
-        state.lastUpdate = now;
-        return { state.anchor, state.scale };
-    }
-
-    void CleanupSmoothingCache(const std::unordered_set<std::string>& activeNames) {
-        const auto now = std::chrono::steady_clock::now();
-        std::lock_guard<std::mutex> lock(g_NametagStateMutex);
-        for (auto it = g_SmoothedNametags.begin(); it != g_SmoothedNametags.end();) {
-            if (activeNames.count(it->first) > 0 || (now - it->second.lastUpdate) <= kSmoothingResetDelay) {
-                ++it;
-                continue;
-            }
-            it = g_SmoothedNametags.erase(it);
-        }
-    }
-
-    void UpdateCachedNametagStats(const std::string& playerName, float realHealth, float maxHealth) {
-        if (playerName.empty()) {
-            return;
-        }
-
-        CachedNametagStats stats;
-        stats.realHealth = realHealth;
-        stats.maxHealth = maxHealth;
-        stats.lastUpdate = std::chrono::steady_clock::now();
-
-        std::lock_guard<std::mutex> lock(g_NametagStateMutex);
-        g_CachedNametagStats[playerName] = stats;
-    }
-
-    bool GetCachedNametagStats(const std::string& playerName, float& realHealth, float& maxHealth) {
-        if (playerName.empty()) {
-            return false;
-        }
-
-        std::lock_guard<std::mutex> lock(g_NametagStateMutex);
-        const auto it = g_CachedNametagStats.find(playerName);
-        if (it == g_CachedNametagStats.end()) {
-            return false;
-        }
-
-        realHealth = it->second.realHealth;
-        maxHealth = it->second.maxHealth;
-        return true;
-    }
-
-    void CleanupNametagStatsCache(const std::unordered_set<std::string>& activeNames) {
-        std::lock_guard<std::mutex> lock(g_NametagStateMutex);
-        for (auto it = g_CachedNametagStats.begin(); it != g_CachedNametagStats.end();) {
-            if (activeNames.count(it->first) > 0) {
-                ++it;
-                continue;
-            }
-
-            it = g_CachedNametagStats.erase(it);
-        }
     }
 
     std::string NormalizeTargetName(std::string name) {
@@ -587,11 +206,7 @@ namespace {
     }
 
     bool TargetNamesMatch(const std::string& left, const std::string& right) {
-        if (left.empty() || right.empty()) {
-            return false;
-        }
-
-        return NormalizeTargetName(left) == NormalizeTargetName(right);
+        return !left.empty() && !right.empty() && NormalizeTargetName(left) == NormalizeTargetName(right);
     }
 
     std::string GetNametagTargetName() {
@@ -611,62 +226,229 @@ namespace {
     bool ShouldRenderOnlyTargetNametag() {
         auto* bridge = Bridge::Get();
         auto* config = bridge ? bridge->GetConfig() : nullptr;
-        return config && config->Target.m_Enabled;
+        return config && config->Target.m_Enabled && !GetNametagTargetName().empty();
     }
 
-    float ResolveNametagHealth(Player* player, JNIEnv* env) {
-        if (!player || !env) {
-            return -1.0f;
+    std::string StripFormatting(const std::string& text) {
+        std::string clean;
+        clean.reserve(text.size());
+
+        for (size_t index = 0; index < text.size(); ++index) {
+            const unsigned char current = static_cast<unsigned char>(text[index]);
+            if (current == 0xA7 || current == 0xC2) {
+                if (current == 0xC2 && index + 1 < text.size() && static_cast<unsigned char>(text[index + 1]) == 0xA7) {
+                    ++index;
+                }
+                if (index + 1 < text.size()) {
+                    ++index;
+                }
+                continue;
+            }
+
+            clean.push_back(text[index]);
         }
 
-        float realHealth = player->GetRealHealth(env);
-        if (!std::isfinite(realHealth) || realHealth <= 0.0f) {
-            realHealth = player->GetHealth(env);
-            if (env->ExceptionCheck()) {
-                env->ExceptionClear();
-                realHealth = 20.0f;
+        return clean;
+    }
+
+    std::string AbbreviateEquipmentName(std::string text) {
+        text = StripFormatting(text);
+        std::string normalized;
+        normalized.reserve(text.size());
+        for (char raw : text) {
+            const unsigned char ch = static_cast<unsigned char>(raw);
+            if (std::isalnum(ch) || std::isspace(ch)) {
+                normalized.push_back(static_cast<char>(std::tolower(ch)));
             }
         }
 
-        return std::isfinite(realHealth) ? realHealth : -1.0f;
-    }
-
-    std::string FormatHealthText(float realHealth) {
-        char buffer[32];
-        std::snprintf(buffer, sizeof(buffer), "%.1f", realHealth);
-        return buffer;
-    }
-
-    std::string FormatDistanceText(float distance) {
-        char buffer[16];
-        std::snprintf(buffer, sizeof(buffer), "%dm", static_cast<int>(std::roundf(distance)));
-        return buffer;
-    }
-
-    ImVec2 CalcTextSize(ImFont* font, float fontSize, const std::string& text) {
-        if (!font || text.empty()) {
-            return ImVec2(0.0f, 0.0f);
+        std::istringstream stream(normalized);
+        std::vector<std::string> words;
+        std::string word;
+        while (stream >> word) {
+            words.push_back(word);
         }
 
-        return font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, text.c_str());
+        if (words.size() >= 2) {
+            std::string label;
+            for (const std::string& token : words) {
+                if (!token.empty()) {
+                    label.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(token.front()))));
+                }
+                if (label.size() >= 3) {
+                    break;
+                }
+            }
+            if (!label.empty()) {
+                return label;
+            }
+        }
+
+        if (!words.empty()) {
+            std::string compact = words.front().substr(0, (std::min)(size_t{ 4 }, words.front().size()));
+            std::transform(compact.begin(), compact.end(), compact.begin(), [](unsigned char ch) {
+                return static_cast<char>(std::toupper(ch));
+            });
+            return compact;
+        }
+
+        return {};
     }
 
-    void DrawShadowedText(ImDrawList* drawList, ImFont* font, float fontSize, const ImVec2& pos, ImU32 color, const std::string& text) {
-        if (!drawList || !font || text.empty()) {
+    std::string BuildEquipmentText(Player* player, JNIEnv* env) {
+        if (!player || !env) {
+            return {};
+        }
+
+        std::vector<std::string> labels;
+        labels.reserve(5);
+
+        jobject heldItem = player->GetHeldItem(env);
+        if (heldItem) {
+            const std::string label = AbbreviateEquipmentName(reinterpret_cast<ItemStack*>(heldItem)->GetDisplayName(env));
+            if (!label.empty()) {
+                labels.push_back(label);
+            }
+            env->DeleteLocalRef(heldItem);
+        }
+
+        for (int slot = 3; slot >= 0; --slot) {
+            jobject armorObject = player->GetCurrentArmor(slot, env);
+            if (!armorObject) {
+                continue;
+            }
+
+            const std::string label = AbbreviateEquipmentName(reinterpret_cast<ItemStack*>(armorObject)->GetDisplayName(env));
+            if (!label.empty()) {
+                labels.push_back(label);
+            }
+            env->DeleteLocalRef(armorObject);
+        }
+
+        std::string result;
+        for (size_t index = 0; index < labels.size(); ++index) {
+            if (index != 0) {
+                result.append("  ");
+            }
+            result.append(labels[index]);
+        }
+
+        return result;
+    }
+
+    ImU32 BuildHealthColor(float realHealth, float maxHealth) {
+        float safeMax = maxHealth <= 0.0f ? 20.0f : maxHealth;
+        if (realHealth > safeMax) {
+            safeMax = realHealth;
+        }
+
+        const float ratio = safeMax > 0.0f ? realHealth / safeMax : 0.0f;
+        if (ratio >= 0.70f) {
+            return IM_COL32(91, 214, 97, 255);
+        }
+        if (ratio >= 0.45f) {
+            return IM_COL32(255, 215, 92, 255);
+        }
+        if (ratio >= 0.20f) {
+            return IM_COL32(255, 165, 80, 255);
+        }
+        return IM_COL32(255, 82, 82, 255);
+    }
+
+    ImU32 GetMinecraftCodeColor(char code, ImU32 fallback) {
+        switch (static_cast<char>(std::tolower(static_cast<unsigned char>(code)))) {
+        case '0': return IM_COL32(0, 0, 0, 255);
+        case '1': return IM_COL32(0, 0, 170, 255);
+        case '2': return IM_COL32(0, 170, 0, 255);
+        case '3': return IM_COL32(0, 170, 170, 255);
+        case '4': return IM_COL32(170, 0, 0, 255);
+        case '5': return IM_COL32(170, 0, 170, 255);
+        case '6': return IM_COL32(255, 170, 0, 255);
+        case '7': return IM_COL32(170, 170, 170, 255);
+        case '8': return IM_COL32(85, 85, 85, 255);
+        case '9': return IM_COL32(85, 85, 255, 255);
+        case 'a': return IM_COL32(85, 255, 85, 255);
+        case 'b': return IM_COL32(85, 255, 255, 255);
+        case 'c': return IM_COL32(255, 85, 85, 255);
+        case 'd': return IM_COL32(255, 85, 255, 255);
+        case 'e': return IM_COL32(255, 255, 85, 255);
+        case 'f': return IM_COL32(255, 255, 255, 255);
+        case 'r': return fallback;
+        default: return fallback;
+        }
+    }
+
+    std::vector<ColoredTextPart> ParseColoredText(const std::string& formattedText, ImU32 defaultColor) {
+        std::vector<ColoredTextPart> parts;
+        std::string current;
+        ImU32 currentColor = defaultColor;
+
+        auto flush = [&]() {
+            if (!current.empty()) {
+                parts.push_back({ current, currentColor });
+                current.clear();
+            }
+        };
+
+        for (size_t index = 0; index < formattedText.size(); ++index) {
+            unsigned char currentByte = static_cast<unsigned char>(formattedText[index]);
+            if (currentByte == 0xC2 && index + 1 < formattedText.size() &&
+                static_cast<unsigned char>(formattedText[index + 1]) == 0xA7) {
+                if (index + 2 < formattedText.size()) {
+                    flush();
+                    currentColor = GetMinecraftCodeColor(formattedText[index + 2], defaultColor);
+                    index += 2;
+                    continue;
+                }
+            }
+
+            if (currentByte == 0xA7 && index + 1 < formattedText.size()) {
+                flush();
+                currentColor = GetMinecraftCodeColor(formattedText[index + 1], defaultColor);
+                ++index;
+                continue;
+            }
+
+            current.push_back(formattedText[index]);
+        }
+
+        flush();
+        return parts;
+    }
+
+    ImVec2 MeasureColoredText(ImFont* font, float fontSize, const std::vector<ColoredTextPart>& parts) {
+        ImVec2 size(0.0f, 0.0f);
+        if (!font) {
+            return size;
+        }
+
+        for (const auto& part : parts) {
+            if (part.text.empty()) {
+                continue;
+            }
+            const ImVec2 partSize = font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, part.text.c_str());
+            size.x += partSize.x;
+            size.y = (std::max)(size.y, partSize.y);
+        }
+
+        return size;
+    }
+
+    void DrawColoredText(ImDrawList* drawList, ImFont* font, float fontSize, ImVec2 pos, const std::vector<ColoredTextPart>& parts) {
+        if (!drawList || !font) {
             return;
         }
 
-        drawList->AddText(font, fontSize, ImVec2(pos.x + kNametagShadowOffset, pos.y + kNametagShadowOffset), IM_COL32(0, 0, 0, 175), text.c_str());
-        drawList->AddText(font, fontSize, pos, color, text.c_str());
-    }
+        float cursorX = pos.x;
+        for (const auto& part : parts) {
+            if (part.text.empty()) {
+                continue;
+            }
 
-    void DrawShadowedIcon(ImDrawList* drawList, ImFont* font, float fontSize, const ImVec2& pos, ImU32 color, const char* iconText) {
-        if (!drawList || !font || !iconText || !iconText[0]) {
-            return;
+            drawList->AddText(font, fontSize, ImVec2(cursorX + kShadowOffset, pos.y + kShadowOffset), IM_COL32(0, 0, 0, 180), part.text.c_str());
+            drawList->AddText(font, fontSize, ImVec2(cursorX, pos.y), part.color, part.text.c_str());
+            cursorX += font->CalcTextSizeA(fontSize, FLT_MAX, 0.0f, part.text.c_str()).x;
         }
-
-        drawList->AddText(font, fontSize, ImVec2(pos.x + kNametagShadowOffset, pos.y + kNametagShadowOffset), IM_COL32(0, 0, 0, 175), iconText);
-        drawList->AddText(font, fontSize, pos, color, iconText);
     }
 }
 
@@ -676,216 +458,13 @@ void Nametags::SetFont(ImFont* font) {
     s_SanFranciscoBoldFont = font;
 }
 
-void Nametags::ShutdownRuntime(void* envPtr) {
-    auto* env = static_cast<JNIEnv*>(envPtr);
-    if (!env || env->PushLocalFrame(64) != 0) {
-        return;
-    }
-
-    jobject worldObject = Minecraft::GetTheWorld(env);
-    jobject scoreboardObject = nullptr;
-    if (worldObject) {
-        scoreboardObject = reinterpret_cast<World*>(worldObject)->GetScoreboard(env);
-    }
-
-    RestoreVanillaNameTags(env, reinterpret_cast<Scoreboard*>(scoreboardObject));
-
-    if (scoreboardObject) {
-        env->DeleteLocalRef(scoreboardObject);
-    }
-    env->PopLocalFrame(nullptr);
-}
-
-void Nametags::TickSynchronous(void* envPtr) {
-    auto* env = static_cast<JNIEnv*>(envPtr);
-    if (!env) {
-        return;
-    }
-
-    jobject worldObject = Minecraft::GetTheWorld(env);
-    if (!worldObject) {
-        RestoreVanillaNameTags(env, nullptr);
-        return;
-    }
-
-    auto* world = reinterpret_cast<World*>(worldObject);
-    jobject scoreboardObject = world->GetScoreboard(env);
-    if (!scoreboardObject) {
-        env->DeleteLocalRef(worldObject);
-        RestoreVanillaNameTags(env, nullptr);
-        return;
-    }
-
-    auto* scoreboard = reinterpret_cast<Scoreboard*>(scoreboardObject);
-    if (!IsEnabled()) {
-        RestoreVanillaNameTags(env, scoreboard);
-        env->DeleteLocalRef(scoreboardObject);
-        env->DeleteLocalRef(worldObject);
-        return;
-    }
-
-    jobject localPlayerObject = Minecraft::GetThePlayer(env);
-    if (!localPlayerObject) {
-        RestoreVanillaNameTags(env, scoreboard);
-        env->DeleteLocalRef(scoreboardObject);
-        env->DeleteLocalRef(worldObject);
-        return;
-    }
-
-    const auto now = std::chrono::steady_clock::now();
-    bool shouldRefreshHealthCache = false;
-    const bool shouldRefreshVanillaHide = true;
-    {
-        std::lock_guard<std::mutex> lock(g_NametagStateMutex);
-        shouldRefreshHealthCache =
-            g_LastHealthCacheRefresh == std::chrono::steady_clock::time_point::min() ||
-            (now - g_LastHealthCacheRefresh) >= kHealthCacheRefreshInterval;
-    }
-
-    if (!shouldRefreshHealthCache && !shouldRefreshVanillaHide) {
-        env->DeleteLocalRef(localPlayerObject);
-        env->DeleteLocalRef(scoreboardObject);
-        env->DeleteLocalRef(worldObject);
-        return;
-    }
-
-    jobject neverVisibility = nullptr;
-    jobject hiddenTeamObject = nullptr;
-    if (shouldRefreshVanillaHide) {
-        neverVisibility = GetNeverVisibilityEnum(env);
-        hiddenTeamObject = scoreboard->GetTeam(env, kHiddenNametagTeamName);
-        if (!hiddenTeamObject) {
-            hiddenTeamObject = scoreboard->CreateTeam(env, kHiddenNametagTeamName);
-        }
-        if (hiddenTeamObject && neverVisibility) {
-            reinterpret_cast<Team*>(hiddenTeamObject)->SetNameTagVisibility(env, neverVisibility);
-        }
-    }
-
-    std::set<std::string> activeTeamNames;
-    std::unordered_set<std::string> activeInjectedPlayers;
-    std::unordered_set<std::string> activePlayerNames;
-    const auto players = world->GetPlayerEntities(env);
-    for (auto* player : players) {
-        if (env->ExceptionCheck()) {
-            env->ExceptionClear();
-        }
-
-        if (!player) {
-            continue;
-        }
-
-        jobject playerObject = reinterpret_cast<jobject>(player);
-        if (env->IsSameObject(playerObject, localPlayerObject)) {
-            env->DeleteLocalRef(playerObject);
-            continue;
-        }
-
-        player->SetAlwaysRenderNameTag(false, env);
-
-        const std::string playerName = player->GetName(env, true);
-        if (playerName.empty()) {
-            env->DeleteLocalRef(playerObject);
-            continue;
-        }
-
-        if (player->HasZeroedBoundingBox(env)) {
-            env->DeleteLocalRef(playerObject);
-            continue;
-        }
-
-        activePlayerNames.insert(playerName);
-
-        if (shouldRefreshHealthCache) {
-            const float realHealth = ResolveNametagHealth(player, env);
-            if (!std::isfinite(realHealth) || realHealth < 0.0f) {
-                env->DeleteLocalRef(playerObject);
-                continue;
-            }
-
-            float maxHealth = player->GetMaxHealth(env);
-            if (env->ExceptionCheck()) {
-                env->ExceptionClear();
-                maxHealth = 20.0f;
-            }
-            
-            if (maxHealth <= 0.0f) {
-                maxHealth = (std::max)(20.0f, realHealth);
-            } else if (realHealth > maxHealth) {
-                maxHealth = realHealth;
-            }
-
-            UpdateCachedNametagStats(playerName, realHealth, maxHealth);
-        }
-
-        if (shouldRefreshVanillaHide) {
-            player->SetAlwaysRenderNameTag(false, env);
-
-            jobject playerTeamObject = scoreboard->GetPlayersTeam(env, playerName);
-            if (playerTeamObject && neverVisibility) {
-                auto* playerTeam = reinterpret_cast<Team*>(playerTeamObject);
-                const std::string teamName = playerTeam->GetRegisteredName(env);
-                EnsureTeamNameHidden(env, scoreboard, teamName, playerTeam, neverVisibility, activeTeamNames);
-                env->DeleteLocalRef(playerTeamObject);
-            } else if (hiddenTeamObject) {
-                scoreboard->AddPlayerToTeam(env, playerName, kHiddenNametagTeamName);
-                activeInjectedPlayers.insert(playerName);
-                activeTeamNames.insert(kHiddenNametagTeamName);
-            }
-        }
-
-        env->DeleteLocalRef(playerObject);
-    }
-
-    if (env->ExceptionCheck()) {
-        env->ExceptionClear();
-    }
-
-    if (shouldRefreshHealthCache) {
-        CleanupNametagStatsCache(activePlayerNames);
-        std::lock_guard<std::mutex> lock(g_NametagStateMutex);
-        g_LastHealthCacheRefresh = now;
-    }
-
-    if (shouldRefreshVanillaHide) {
-        {
-            std::lock_guard<std::mutex> lock(g_NametagStateMutex);
-            for (auto it = g_InjectedPlayers.begin(); it != g_InjectedPlayers.end();) {
-                if (activeInjectedPlayers.count(*it) > 0) {
-                    ++it;
-                    continue;
-                }
-
-                scoreboard->RemovePlayerFromTeams(env, *it);
-                it = g_InjectedPlayers.erase(it);
-            }
-
-            g_InjectedPlayers.insert(activeInjectedPlayers.begin(), activeInjectedPlayers.end());
-            g_LastVanillaHideRefresh = now;
-        }
-
-        CleanupInactiveTeamOverrides(env, scoreboard, activeTeamNames);
-
-        if (hiddenTeamObject) {
-            env->DeleteLocalRef(hiddenTeamObject);
-        }
-        if (neverVisibility) {
-            env->DeleteLocalRef(neverVisibility);
-        }
-    }
-
-    env->DeleteLocalRef(localPlayerObject);
-    env->DeleteLocalRef(scoreboardObject);
-    env->DeleteLocalRef(worldObject);
-}
-
 void Nametags::RenderOverlay(ImDrawList* drawList, float screenW, float screenH) {
     if (!IsEnabled() || !drawList || !g_Game || !g_Game->IsInitialized()) {
         return;
     }
 
     JNIEnv* env = g_Game->GetCurrentEnv();
-    if (!env || env->PushLocalFrame(256) != 0) {
+    if (!env || env->PushLocalFrame(512) != 0) {
         return;
     }
 
@@ -899,26 +478,29 @@ void Nametags::RenderOverlay(ImDrawList* drawList, float screenW, float screenH)
 
     auto* localPlayer = reinterpret_cast<Player*>(localPlayerObject);
     auto* world = reinterpret_cast<World*>(worldObject);
-    auto* timer = reinterpret_cast<Timer*>(timerObject);
-
-    const RenderMatrixSnapshot renderSnapshot = CaptureRenderMatrixSnapshot();
-    if (!renderSnapshot.IsValid()) {
+    const BlockVisuals::RenderMatrixSnapshot snapshot = BlockVisuals::CaptureRenderMatrixSnapshot();
+    if (!snapshot.IsValid()) {
         env->PopLocalFrame(nullptr);
         return;
     }
 
-    const float partialTicks = timer->GetRenderPartialTicks(env);
-    std::vector<NametagRenderEntry> entries;
-    entries.reserve(32);
+    const float partialTicks = reinterpret_cast<Timer*>(timerObject)->GetRenderPartialTicks(env);
+    if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+        env->PopLocalFrame(nullptr);
+        return;
+    }
+
+    jobject scoreboardObject = world->GetScoreboard(env);
+    auto* scoreboard = reinterpret_cast<Scoreboard*>(scoreboardObject);
     const bool renderOnlyTarget = ShouldRenderOnlyTargetNametag();
     const std::string targetName = renderOnlyTarget ? GetNametagTargetName() : std::string{};
 
+    std::vector<NametagEntry> entries;
+    entries.reserve(64);
+
     const auto players = world->GetPlayerEntities(env);
     for (auto* player : players) {
-        if (env->ExceptionCheck()) {
-            env->ExceptionClear();
-        }
-
         if (!player) {
             continue;
         }
@@ -929,93 +511,121 @@ void Nametags::RenderOverlay(ImDrawList* drawList, float screenW, float screenH)
             continue;
         }
 
-        if (player->IsInvisible(env)) {
+        const std::string plainName = player->GetName(env, true);
+        if (renderOnlyTarget && !TargetNamesMatch(plainName, targetName)) {
             env->DeleteLocalRef(playerObject);
             continue;
         }
 
-        if (player->HasZeroedBoundingBox(env)) {
-            env->DeleteLocalRef(playerObject);
-            continue;
-        }
-
-        const std::string playerName = player->GetName(env, true);
-        if (renderOnlyTarget && !TargetNamesMatch(playerName, targetName)) {
-            env->DeleteLocalRef(playerObject);
-            continue;
-        }
-
-        player->SetAlwaysRenderNameTag(false, env);
-
-        float realHealth = 0.0f;
-        float maxHealth = 20.0f;
-        if (playerName.empty() || !GetCachedNametagStats(playerName, realHealth, maxHealth) || realHealth <= 0.0f) {
-            env->DeleteLocalRef(playerObject);
-            continue;
-        }
-
+        const float health = ResolveNametagHealth(player, env);
         const float distance = localPlayer->GetDistanceToEntity(playerObject, env);
-        if (!std::isfinite(distance) || distance <= 0.0f || distance > kMaximumRenderableDistance) {
+        if (plainName.empty() || health <= 0.0f || !std::isfinite(distance) || distance <= 0.0f || distance > kMaximumRenderableDistance || HasZeroedBoundingBox(player, env)) {
             env->DeleteLocalRef(playerObject);
             continue;
         }
 
-        float entityHeight = player->GetHeight(env);
-        if (entityHeight <= 0.05f) {
-            entityHeight = 1.8f;
+        float maxHealth = player->GetMaxHealth(env);
+        if (!std::isfinite(maxHealth) || maxHealth <= 0.0f) {
+            maxHealth = (std::max)(20.0f, health);
         }
 
-        const Vec3D position = player->GetPos(env);
-        const Vec3D lastPosition = player->GetLastTickPos(env);
-        const double interpolatedX = lastPosition.x + (position.x - lastPosition.x) * partialTicks;
-        const double interpolatedY = lastPosition.y + (position.y - lastPosition.y) * partialTicks;
-        const double interpolatedZ = lastPosition.z + (position.z - lastPosition.z) * partialTicks;
-
-        ScreenPoint projectedAnchor;
-        if (!TryProjectPoint(
-                {
-                    static_cast<float>(interpolatedX),
-                    static_cast<float>(interpolatedY + entityHeight + kNametagAnchorVerticalOffset),
-                    static_cast<float>(interpolatedZ)
-                },
-                renderSnapshot,
-                projectedAnchor)) {
-            env->DeleteLocalRef(playerObject);
-            continue;
+        float absorption = 0.0f;
+        if (IsAbsorptionEnabled()) {
+            TryGetAbsorptionAmount(player, env, absorption);
         }
 
-        const ScreenPoint anchor {
-            std::round(projectedAnchor.x),
-            std::round(projectedAnchor.y)
-        };
+        std::string formattedName = player->GetFormattedDisplayName(env);
+        if (formattedName.empty()) {
+            formattedName = plainName;
+        }
 
-        if (anchor.x < -64.0f || anchor.y < -64.0f || anchor.x > (screenW + 64.0f) || anchor.y > (screenH + 64.0f)) {
-            env->DeleteLocalRef(playerObject);
-            continue;
+        const std::string formattedClanTag = scoreboard ? player->GetFormattedClanTag(env, scoreboard) : std::string{};
+        if (!formattedClanTag.empty() && StripFormatting(formattedName).find(StripFormatting(formattedClanTag)) == std::string::npos) {
+            formattedName.append(" ");
+            formattedName.append(formattedClanTag);
         }
 
         entries.push_back({
-            playerName,
-            realHealth,
+            formattedName,
+            IsEquipmentEnabled() ? BuildEquipmentText(player, env) : std::string{},
+            health,
             maxHealth,
+            absorption,
             distance,
-            anchor,
-            ComputeNametagScale(distance)
+            (std::max)(0.6f, player->GetWidth(env)),
+            (std::max)(1.8f, player->GetHeight(env)),
+            player->GetPos(env),
+            player->GetLastTickPos(env),
+            true
         });
 
         env->DeleteLocalRef(playerObject);
     }
 
-    if (env->ExceptionCheck()) {
-        env->ExceptionClear();
+    if (IsMobsEnabled() || IsAnimalsEnabled()) {
+        const auto entities = world->GetLoadedEntities(env);
+        for (jobject entityObject : entities) {
+            if (!entityObject || env->IsSameObject(entityObject, localPlayerObject)) {
+                if (entityObject) {
+                    env->DeleteLocalRef(entityObject);
+                }
+                continue;
+            }
+
+            const bool isPlayerEntity = IsInstanceOfMapped(env, entityObject, "net/minecraft/entity/player/EntityPlayer");
+            const bool isMobEntity = IsMobsEnabled() && IsInstanceOfMapped(env, entityObject, "net/minecraft/entity/monster/EntityMob");
+            const bool isAnimalEntity = IsAnimalsEnabled() && IsInstanceOfMapped(env, entityObject, "net/minecraft/entity/passive/EntityAnimal");
+            if (isPlayerEntity || (!isMobEntity && !isAnimalEntity)) {
+                env->DeleteLocalRef(entityObject);
+                continue;
+            }
+
+            auto* entity = reinterpret_cast<Player*>(entityObject);
+            const float health = ResolveNametagHealth(entity, env);
+            const float distance = localPlayer->GetDistanceToEntity(entityObject, env);
+            if (health <= 0.0f || !std::isfinite(distance) || distance <= 0.0f || distance > kMaximumRenderableDistance || HasZeroedBoundingBox(entity, env)) {
+                env->DeleteLocalRef(entityObject);
+                continue;
+            }
+
+            float maxHealth = entity->GetMaxHealth(env);
+            if (!std::isfinite(maxHealth) || maxHealth <= 0.0f) {
+                maxHealth = (std::max)(20.0f, health);
+            }
+
+            const std::string entityName = entity->GetName(env, true);
+            if (entityName.empty()) {
+                env->DeleteLocalRef(entityObject);
+                continue;
+            }
+
+            entries.push_back({
+                entityName,
+                {},
+                health,
+                maxHealth,
+                0.0f,
+                distance,
+                (std::max)(0.6f, entity->GetWidth(env)),
+                (std::max)(1.8f, entity->GetHeight(env)),
+                entity->GetPos(env),
+                entity->GetLastTickPos(env),
+                false
+            });
+
+            env->DeleteLocalRef(entityObject);
+        }
     }
 
     if (entries.empty()) {
+        if (scoreboardObject) {
+            env->DeleteLocalRef(scoreboardObject);
+        }
         env->PopLocalFrame(nullptr);
         return;
     }
 
-    std::sort(entries.begin(), entries.end(), [](const NametagRenderEntry& left, const NametagRenderEntry& right) {
+    std::sort(entries.begin(), entries.end(), [](const NametagEntry& left, const NametagEntry& right) {
         return left.distance > right.distance;
     });
 
@@ -1025,83 +635,103 @@ void Nametags::RenderOverlay(ImDrawList* drawList, float screenW, float screenH)
     }
 
     ImFont* tagFont = s_SanFranciscoBoldFont ? s_SanFranciscoBoldFont : ImGui::GetFont();
-    bool renderedAnyNametag = false;
-    std::unordered_set<std::string> activeRenderedNames;
+    bool renderedAny = false;
 
     for (const auto& entry : entries) {
-        if (!tagFont) {
-            break;
+        const double interpolatedX = entry.lastPos.x + ((entry.currentPos.x - entry.lastPos.x) * partialTicks);
+        const double interpolatedY = entry.lastPos.y + ((entry.currentPos.y - entry.lastPos.y) * partialTicks);
+        const double interpolatedZ = entry.lastPos.z + ((entry.currentPos.z - entry.lastPos.z) * partialTicks);
+
+        ProjectedNametagBox projectedBox;
+        if (!TryBuildProjectedNametagBox(
+                interpolatedX,
+                interpolatedY,
+                interpolatedZ,
+                entry.width,
+                entry.height,
+                snapshot,
+                projectedBox)) {
+            continue;
         }
 
-        const auto [smoothedAnchor, smoothedScale] = SmoothNametagState(entry.name, entry.anchor, entry.scale);
-        activeRenderedNames.insert(entry.name);
+        const float fontScale = (std::max)(0.78f, (std::min)(1.08f, 1.0f - (entry.distance * 0.0125f)));
+        const float fontSize = kBaseFontSize * fontScale;
+        const float equipmentFontSize = kEquipmentFontSize * fontScale;
 
-        const float fontSize = kNametagBaseFontSize * smoothedScale;
-        const float iconFontSize = fontSize * 0.95f;
+        std::vector<ColoredTextPart> lineParts = ParseColoredText(entry.name, entry.isPlayer ? IM_COL32(255, 214, 88, 255) : IM_COL32(238, 238, 238, 255));
+        if (IsHealthEnabled()) {
+            char healthBuffer[32];
+            std::snprintf(healthBuffer, sizeof(healthBuffer), " %.1f", entry.health);
+            lineParts.push_back({ healthBuffer, BuildHealthColor(entry.health, entry.maxHealth) });
+        }
+        if (IsAbsorptionEnabled() && entry.absorption > 0.0f) {
+            char absorptionBuffer[24];
+            std::snprintf(absorptionBuffer, sizeof(absorptionBuffer), " +%.1f", entry.absorption);
+            lineParts.push_back({ absorptionBuffer, IM_COL32(255, 214, 88, 255) });
+        }
+        if (IsDistanceEnabled()) {
+            char distanceBuffer[24];
+            std::snprintf(distanceBuffer, sizeof(distanceBuffer), " %dm", static_cast<int>(std::round(entry.distance)));
+            lineParts.push_back({ distanceBuffer, IM_COL32(166, 172, 180, 255) });
+        }
 
-        const std::string healthText = FormatHealthText(entry.realHealth);
-        const std::string distanceText = FormatDistanceText(entry.distance);
+        const ImVec2 lineSize = MeasureColoredText(tagFont, fontSize, lineParts);
+        const ImVec2 equipmentSize = entry.equipment.empty()
+            ? ImVec2(0.0f, 0.0f)
+            : tagFont->CalcTextSizeA(equipmentFontSize, FLT_MAX, 0.0f, entry.equipment.c_str());
 
-        const ImVec2 nameSize = CalcTextSize(tagFont, fontSize, entry.name);
-        const ImVec2 healthSize = CalcTextSize(tagFont, fontSize, healthText);
-        const ImVec2 heartSize = CalcTextSize(tagFont, iconFontSize, ICON_MD_FAVORITE);
-        const ImVec2 distanceSize = CalcTextSize(tagFont, fontSize, distanceText);
+        const float anchorX = std::round((projectedBox.minX + projectedBox.maxX) * 0.5f);
+        const float anchorY = std::round(projectedBox.minY - (2.0f + (kAnchorVerticalOffset * fontScale)));
+        const ImVec2 linePos(
+            std::round(anchorX - (lineSize.x * 0.5f)),
+            std::round(anchorY - lineSize.y));
 
-        const float scaledSpacing = kNametagSegmentSpacing * smoothedScale;
-        const float totalTextWidth =
-            nameSize.x +
-            scaledSpacing +
-            healthSize.x +
-            scaledSpacing +
-            heartSize.x +
-            scaledSpacing +
-            distanceSize.x;
+        if (linePos.x < -80.0f || linePos.y < -80.0f || linePos.x > screenW + 80.0f || linePos.y > screenH + 80.0f) {
+            continue;
+        }
 
-        const float tagWidth = totalTextWidth + (kNametagHorizontalPadding * 2.0f * smoothedScale);
-        const float tagHeight = (std::max)({ nameSize.y, healthSize.y, heartSize.y, distanceSize.y }) + (kNametagVerticalPadding * 2.0f * smoothedScale);
-        const ImVec2 tagMin(
-            std::round(smoothedAnchor.x - (tagWidth * 0.5f)),
-            std::round(smoothedAnchor.y - tagHeight - (kNametagTopOffset * smoothedScale)));
-        const ImVec2 tagMax(
-            std::round(tagMin.x + tagWidth),
-            std::round(tagMin.y + tagHeight));
+        DrawColoredText(backgroundDrawList, tagFont, fontSize, linePos, lineParts);
 
-        backgroundDrawList->AddRectFilled(
-            tagMin,
-            tagMax,
-            IM_COL32(12, 12, 12, 172),
-            kNametagCornerRounding * smoothedScale);
-        backgroundDrawList->AddRect(
-            tagMin,
-            tagMax,
-            IM_COL32(255, 255, 255, 34),
-            kNametagCornerRounding * smoothedScale,
-            0,
-            1.0f);
+        if (IsGraphicalHealthEnabled()) {
+            const float absorptionHealth = IsAbsorptionEnabled() ? entry.absorption : 0.0f;
+            const float effectiveMaxHealth = (std::max)(entry.maxHealth + absorptionHealth, 1.0f);
+            const float totalHealth = (std::max)(0.0f, entry.health + absorptionHealth);
+            const float ratio = (std::max)(0.0f, (std::min)(1.0f, totalHealth / effectiveMaxHealth));
+            const float barWidth = kBarWidth * fontScale;
+            const ImVec2 barMin(std::round(anchorX - (barWidth * 0.5f)), std::round(linePos.y + lineSize.y + 1.5f));
+            const ImVec2 barMax(std::round(barMin.x + barWidth), std::round(barMin.y + (kBarHeight * fontScale)));
+            const float fillWidth = (barMax.x - barMin.x) * ratio;
 
-        const float textBaselineY = std::round(tagMin.y + (tagHeight - nameSize.y) * 0.5f);
-        float cursorX = std::round(tagMin.x + (kNametagHorizontalPadding * smoothedScale));
+            backgroundDrawList->AddRectFilled(barMin, barMax, IM_COL32(0, 0, 0, 160), 2.0f);
+            backgroundDrawList->AddRectFilled(barMin, ImVec2(barMin.x + fillWidth, barMax.y), BuildHealthColor(entry.health, entry.maxHealth), 2.0f);
+            if (absorptionHealth > 0.0f && effectiveMaxHealth > 0.0f) {
+                const float baseRatio = (std::max)(0.0f, (std::min)(1.0f, entry.health / effectiveMaxHealth));
+                const float absorptionRatio = (std::max)(0.0f, (std::min)(1.0f, totalHealth / effectiveMaxHealth));
+                backgroundDrawList->AddRectFilled(
+                    ImVec2(barMin.x + ((barMax.x - barMin.x) * baseRatio), barMin.y),
+                    ImVec2(barMin.x + ((barMax.x - barMin.x) * absorptionRatio), barMax.y),
+                    IM_COL32(255, 214, 88, 255),
+                    2.0f);
+            }
+        }
 
-        DrawShadowedText(backgroundDrawList, tagFont, fontSize, ImVec2(cursorX, textBaselineY), IM_COL32(248, 248, 248, 255), entry.name);
-        cursorX += nameSize.x + scaledSpacing;
+        if (IsEquipmentEnabled() && !entry.equipment.empty()) {
+            const ImVec2 equipmentPos(
+                std::round(anchorX - (equipmentSize.x * 0.5f)),
+                std::round(linePos.y + lineSize.y + (IsGraphicalHealthEnabled() ? 6.0f * fontScale : 3.0f)));
+            backgroundDrawList->AddText(tagFont, equipmentFontSize, ImVec2(equipmentPos.x + 1.0f, equipmentPos.y + 1.0f), IM_COL32(0, 0, 0, 170), entry.equipment.c_str());
+            backgroundDrawList->AddText(tagFont, equipmentFontSize, equipmentPos, IM_COL32(214, 219, 225, 255), entry.equipment.c_str());
+        }
 
-        const ImU32 healthColor = BuildHealthColor(entry.realHealth, entry.maxHealth);
-        DrawShadowedText(backgroundDrawList, tagFont, fontSize, ImVec2(cursorX, textBaselineY), healthColor, healthText);
-        cursorX += healthSize.x + scaledSpacing;
-
-        const float iconY = std::round(tagMin.y + (tagHeight - heartSize.y) * 0.5f) + (kHeartVerticalOffset * smoothedScale);
-        DrawShadowedIcon(backgroundDrawList, tagFont, iconFontSize, ImVec2(cursorX, iconY), IM_COL32(255, 72, 72, 255), ICON_MD_FAVORITE);
-        cursorX += heartSize.x + scaledSpacing;
-
-        DrawShadowedText(backgroundDrawList, tagFont, fontSize, ImVec2(cursorX, textBaselineY), IM_COL32(186, 186, 186, 255), distanceText);
-        renderedAnyNametag = true;
+        renderedAny = true;
     }
 
-    CleanupSmoothingCache(activeRenderedNames);
-
-    if (renderedAnyNametag) {
+    if (renderedAny) {
         MarkInUse(120);
     }
 
+    if (scoreboardObject) {
+        env->DeleteLocalRef(scoreboardObject);
+    }
     env->PopLocalFrame(nullptr);
 }

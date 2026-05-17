@@ -89,6 +89,7 @@ namespace {
     struct ItemRenderEntry {
         jobject entity = nullptr;
         jobject stack = nullptr;
+        AxisAlignedBB_t worldBox{};
         ProjectedItemBox projectedBox;
         ImU32 fillColor = IM_COL32_WHITE;
         ImU32 lineColor = IM_COL32_WHITE;
@@ -584,6 +585,27 @@ namespace {
         return BuildDurabilityColor(percentage, 235);
     }
 
+    void DrawWireBox(const AxisAlignedBB_t& box) {
+        glBegin(GL_LINES);
+
+        glVertex3f(box.minX, box.minY, box.minZ); glVertex3f(box.maxX, box.minY, box.minZ);
+        glVertex3f(box.maxX, box.minY, box.minZ); glVertex3f(box.maxX, box.minY, box.maxZ);
+        glVertex3f(box.maxX, box.minY, box.maxZ); glVertex3f(box.minX, box.minY, box.maxZ);
+        glVertex3f(box.minX, box.minY, box.maxZ); glVertex3f(box.minX, box.minY, box.minZ);
+
+        glVertex3f(box.minX, box.maxY, box.minZ); glVertex3f(box.maxX, box.maxY, box.minZ);
+        glVertex3f(box.maxX, box.maxY, box.minZ); glVertex3f(box.maxX, box.maxY, box.maxZ);
+        glVertex3f(box.maxX, box.maxY, box.maxZ); glVertex3f(box.minX, box.maxY, box.maxZ);
+        glVertex3f(box.minX, box.maxY, box.maxZ); glVertex3f(box.minX, box.maxY, box.minZ);
+
+        glVertex3f(box.minX, box.minY, box.minZ); glVertex3f(box.minX, box.maxY, box.minZ);
+        glVertex3f(box.maxX, box.minY, box.minZ); glVertex3f(box.maxX, box.maxY, box.minZ);
+        glVertex3f(box.maxX, box.minY, box.maxZ); glVertex3f(box.maxX, box.maxY, box.maxZ);
+        glVertex3f(box.minX, box.minY, box.maxZ); glVertex3f(box.minX, box.maxY, box.maxZ);
+
+        glEnd();
+    }
+
     jobject GetEntityRenderObject(JNIEnv* env, jobject renderManagerObject, jobject entityObject) {
         if (!env || !renderManagerObject || !entityObject || !g_Game || !g_Game->IsInitialized()) {
             return nullptr;
@@ -693,7 +715,12 @@ void ItemChams::TickSynchronous(void* envPtr) {
         return;
     }
 
-    ApplyArmorFiltering(env, worldObject);
+    if (GetMode() == kModeDraw) {
+        ApplyArmorFiltering(env, worldObject);
+    } else if (m_WasEnabled) {
+        RestoreHiddenArmorItems(env, worldObject);
+    }
+
     if (IsDropNotificationsEnabled() || IsPickupNotificationsEnabled()) {
         UpdateItemNotifications(env, worldObject);
     } else {
@@ -785,13 +812,6 @@ void ItemChams::RenderOverlay(ImDrawList* drawList, float screenW, float screenH
             continue;
         }
 
-        const int identityHash = GetObjectIdentityHash(env, entity);
-        if (GetRenderDistanceWeight(env, entity) <= 0.0 && !WasHiddenByModule(identityHash)) {
-            env->DeleteLocalRef(stackObject);
-            env->DeleteLocalRef(entity);
-            continue;
-        }
-
         if (renderEsp) {
             jobject boundingBoxObject = GetEntityBoundingBox(env, entity);
             if (!boundingBoxObject) {
@@ -801,31 +821,15 @@ void ItemChams::RenderOverlay(ImDrawList* drawList, float screenW, float screenH
             }
 
             const AxisAlignedBB_t boundingBox = reinterpret_cast<AxisAlignedBB*>(boundingBoxObject)->GetNativeBoundingBox(env);
-            ProjectedItemBox projectedBox{};
-            const bool projected = TryBuildProjectedItemBox(boundingBox, snapshot, projectedBox);
             env->DeleteLocalRef(boundingBoxObject);
-
-            if (!projected) {
-                env->DeleteLocalRef(stackObject);
-                env->DeleteLocalRef(entity);
-                continue;
-            }
-
-            const float boxWidth = projectedBox.maxX - projectedBox.minX;
-            const float boxHeight = projectedBox.maxY - projectedBox.minY;
-            const float iconSize = (std::clamp)((std::min)(boxWidth, boxHeight) * 0.9f, kMinIconSize, kMaxIconSize);
-            const ImVec2 iconPosition(
-                projectedBox.minX + ((boxWidth - iconSize) * 0.5f),
-                projectedBox.minY + ((boxHeight - iconSize) * 0.5f));
 
             renderEntries.push_back({
                 entity,
                 stackObject,
-                projectedBox,
+                boundingBox,
+                {},
                 BuildFillColor(percentage),
-                BuildLineColor(percentage),
-                iconPosition,
-                iconSize / 16.0f
+                BuildLineColor(percentage)
             });
             continue;
         }
@@ -857,6 +861,7 @@ void ItemChams::RenderOverlay(ImDrawList* drawList, float screenW, float screenH
             entity,
             stackObject,
             {},
+            {},
             BuildFillColor(percentage),
             BuildLineColor(percentage),
             {},
@@ -868,72 +873,44 @@ void ItemChams::RenderOverlay(ImDrawList* drawList, float screenW, float screenH
         });
     }
 
-    if (renderEsp) {
-        for (const auto& entry : renderEntries) {
-            const ImVec2 min(entry.projectedBox.minX, entry.projectedBox.minY);
-            const ImVec2 max(entry.projectedBox.maxX, entry.projectedBox.maxY);
-            drawList->AddRect(
-                ImVec2(min.x - 2.0f, min.y - 2.0f),
-                ImVec2(max.x + 2.0f, max.y + 2.0f),
-                IM_COL32(0, 0, 0, 110),
-                2.0f,
-                0,
-                3.0f);
-            drawList->AddRectFilled(min, max, entry.fillColor, 2.0f);
-            drawList->AddRect(min, max, entry.lineColor, 2.0f, 0, 1.6f);
-        }
-    }
-
     if (!renderEntries.empty() && renderEsp) {
-        jobject renderItemObject = Minecraft::GetRenderItem(env);
-        if (renderItemObject) {
-            auto* renderItem = reinterpret_cast<RenderItem*>(renderItemObject);
+        glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_LINE_BIT | GL_POLYGON_BIT);
 
-            glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glMatrixMode(GL_PROJECTION);
+        glPushMatrix();
+        glLoadMatrixf(snapshot.projection.data());
 
-            GLint viewport[4] = {};
-            glGetIntegerv(GL_VIEWPORT, viewport);
+        glMatrixMode(GL_MODELVIEW);
+        glPushMatrix();
+        glLoadMatrixf(snapshot.modelView.data());
 
-            glMatrixMode(GL_PROJECTION);
-            glPushMatrix();
-            glLoadIdentity();
-            glOrtho(0.0, viewport[2], viewport[3], 0.0, -1000.0, 1000.0);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDisable(GL_TEXTURE_2D);
+        glDisable(GL_LIGHTING);
+        glDisable(GL_DEPTH_TEST);
+        glEnable(GL_LINE_SMOOTH);
+        glLineWidth(1.4f);
 
-            glMatrixMode(GL_MODELVIEW);
-            glPushMatrix();
-            glLoadIdentity();
-
-            glEnable(GL_DEPTH_TEST);
-            glDepthFunc(GL_ALWAYS);
-            glEnable(GL_LIGHTING);
-            glEnable(GL_COLOR_MATERIAL);
-            glEnable(GL_BLEND);
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-            RenderHelper::EnableGUIStandardItemLighting(env);
-
-            for (const auto& entry : renderEntries) {
-                glPushMatrix();
-                glTranslatef(entry.iconPosition.x, entry.iconPosition.y, 0.0f);
-                glScalef(entry.iconScale, entry.iconScale, 1.0f);
-                renderItem->RenderItemIntoGUI(entry.stack, 0, 0, env);
-                glPopMatrix();
-            }
-
-            RenderHelper::DisableStandardItemLighting(env);
-
-            glDisable(GL_BLEND);
-            glDisable(GL_COLOR_MATERIAL);
-            glDisable(GL_LIGHTING);
-            glDisable(GL_DEPTH_TEST);
-            glDepthFunc(GL_LEQUAL);
-
-            glMatrixMode(GL_PROJECTION);
-            glPopMatrix();
-            glMatrixMode(GL_MODELVIEW);
-            glPopMatrix();
-            glPopAttrib();
+        for (const auto& entry : renderEntries) {
+            const ImVec4 color = ImGui::ColorConvertU32ToFloat4(entry.lineColor);
+            glColor4f(color.x, color.y, color.z, color.w);
+            DrawWireBox(entry.worldBox);
         }
+
+        glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+        glLineWidth(1.0f);
+        glDisable(GL_LINE_SMOOTH);
+        glEnable(GL_DEPTH_TEST);
+        glEnable(GL_TEXTURE_2D);
+        glEnable(GL_LIGHTING);
+        glDisable(GL_BLEND);
+
+        glMatrixMode(GL_PROJECTION);
+        glPopMatrix();
+        glMatrixMode(GL_MODELVIEW);
+        glPopMatrix();
+        glPopAttrib();
     }
 
     if (!renderEntries.empty() && !renderEsp) {

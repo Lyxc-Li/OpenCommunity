@@ -22,7 +22,7 @@ enum class GameChatOutputMode {
 
 struct ModuleConfig {
     static constexpr std::uint32_t kMagic = 0x4746434F; // OCFG
-    static constexpr std::uint32_t kVersion = 12;
+    static constexpr std::uint32_t kVersion = 14;
 
     std::uint32_t m_Magic = kMagic;
     std::uint32_t m_Version = kVersion;
@@ -36,17 +36,6 @@ struct ModuleConfig {
     struct {
         bool m_KeybindInputBlocked = false;
     } Runtime;
-
-    struct KeybindEntry {
-        int m_Category = -1;
-        char m_ModuleName[64] = {};
-        int m_Keybind = 0;
-    };
-
-    struct {
-        KeybindEntry m_Entries[64] = {};
-        int m_Count = 0;
-    } Keybinds;
 
     struct {
         bool m_UseGameChat = false;
@@ -142,6 +131,17 @@ struct ModuleConfig {
         bool m_Enabled = false;
     } Nametags;
 
+    struct {
+        bool m_Enabled = false;
+        bool m_ShowHealth = true;
+        bool m_ShowDistance = false;
+        bool m_ShowEquipment = false;
+        bool m_ShowGraphicalHealth = true;
+        bool m_ShowAbsorption = true;
+        bool m_ShowMobs = false;
+        bool m_ShowAnimals = false;
+    } NametagsVisuals;
+
     struct EnemyInfoListEntry {
         char m_Name[17] = {};
         int m_RemainingDurability[4] = {};
@@ -191,6 +191,35 @@ struct ModuleConfig {
 
     struct {
         bool m_Enabled = false;
+        int m_Mode = 0;
+        float m_OccludedColor[4] = { 1.0f, 0.18f, 0.18f, 0.88f };
+        float m_VisibleColor[4] = { 0.28f, 0.92f, 0.45f, 0.88f };
+    } PlayerChams;
+
+    struct {
+        bool m_Enabled = false;
+        float m_Color[4] = { 0.28f, 0.92f, 0.45f, 0.88f };
+    } PlayerESP;
+
+    struct {
+        bool m_Enabled = false;
+        int m_Range = 28;
+        float m_Color[4] = { 0.15f, 0.85f, 1.0f, 0.95f };
+        float m_Scale = 1.0f;
+    } BedPlates;
+
+    struct {
+        bool m_Enabled = false;
+        int m_Range = 32;
+        bool m_OnlyCaves = false;
+        bool m_UseTracers = false;
+        float m_Color[4] = { 0.15f, 0.85f, 1.0f, 0.95f };
+        bool m_BlockEnabled[4] = { true, false, false, false };
+        char m_BlockQueries[4][64] = { "minecraft:bed", "", "", "" };
+    } Search;
+
+    struct {
+        bool m_Enabled = false;
     } NoHitDelay;
 
     struct {
@@ -221,6 +250,10 @@ struct ModuleConfig {
         bool m_Notifications = true;
         bool m_NoRender = false;
         bool m_ItemChams = false;
+        bool m_PlayerChams = false;
+        bool m_PlayerESP = false;
+        bool m_BedPlates = false;
+        bool m_Search = false;
         bool m_RightClicker = false;
         bool m_WTap = false;
         bool m_AimAssist = false;
