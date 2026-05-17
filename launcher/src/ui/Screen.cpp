@@ -4643,6 +4643,7 @@ static void RenderModulesForCategory(ModuleCategory category, float areaWidth, f
 
     float layoutColY[2] = { 0.0f, 0.0f };
     for (const auto& mod : modules) {
+        if (mod->IsHidden()) continue;
         if (searchQuery && searchQuery[0] != '\0') {
             std::string name = mod->GetName();
             std::string query = searchQuery;
@@ -4676,6 +4677,7 @@ static void RenderModulesForCategory(ModuleCategory category, float areaWidth, f
     for (int mi = 0; mi < (int)modules.size(); mi++) {
         auto& mod = modules[mi];
 
+        if (mod->IsHidden()) continue;
         if (searchQuery && searchQuery[0] != '\0') {
             std::string name = mod->GetName();
             std::string query = searchQuery;

@@ -51,14 +51,14 @@ namespace {
         std::string name;
         float health    = 0.0f;
         float maxHealth = 20.0f;
-        float absorption = 0.0f;
         float distance  = 0.0f;
         float width     = 0.6f;
         float height    = 1.8f;
         Vec3D currentPos{};
         Vec3D lastPos{};
         bool  isPlayer  = false;
-        std::vector<jobject> equipmentRefs; // raw ptrs into Nametags::m_FrameItemGlobalRefs
+        std::vector<jobject> equipmentRefs;
+        std::vector<ImU32> effects;
     };
 
     bool IsInstanceOfMapped(JNIEnv* env, jobject object, const char* mappingKey) {
@@ -79,32 +79,6 @@ namespace {
         if (!std::isfinite(realHealth) || realHealth <= 0.0f)
             realHealth = player->GetHealth(env);
         return std::isfinite(realHealth) ? realHealth : -1.0f;
-    }
-
-    bool TryGetAbsorptionAmount(Player* player, JNIEnv* env, float& amount) {
-        amount = 0.0f;
-        if (!player || !env) return false;
-
-        auto* playerClass = reinterpret_cast<Class*>(env->GetObjectClass(reinterpret_cast<jobject>(player)));
-        if (!playerClass) return false;
-
-        Method* method = playerClass->GetMethod(env, "getAbsorptionAmount", "()F");
-        if (!method)
-            method = playerClass->GetMethod(env, "func_110139_bj", "()F");
-
-        amount = method ? method->CallFloatMethod(env, player) : 0.0f;
-        env->DeleteLocalRef(reinterpret_cast<jclass>(playerClass));
-        if (env->ExceptionCheck()) {
-            env->ExceptionClear();
-            amount = 0.0f;
-            return false;
-        }
-
-        if (!std::isfinite(amount) || amount < 0.0f) {
-            amount = 0.0f;
-            return false;
-        }
-        return amount > 0.0f;
     }
 
     bool TryBuildProjectedNametagBox(
@@ -327,6 +301,13 @@ void Nametags::ItemIconCallback(const ImDrawList* /*drawList*/, const ImDrawCmd*
     glLoadIdentity();
     glOrtho(0.0, static_cast<double>(viewport[2]), static_cast<double>(viewport[3]),
             0.0, -1000.0, 1000.0);
+
+    // Capture the clean ortho content so we can force-restore it between items.
+    // RenderItemIntoGUI for 3D models (armor, weapons) can change the projection
+    // matrix content without changing the stack depth, corrupting subsequent items.
+    GLfloat orthoProj[16];
+    glGetFloatv(GL_PROJECTION_MATRIX, orthoProj);
+
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
 
@@ -343,6 +324,13 @@ void Nametags::ItemIconCallback(const ImDrawList* /*drawList*/, const ImDrawCmd*
             if (!draw.itemStackGlobalRef) continue;
 
             const float mcScale = draw.size / 16.0f;
+
+            // Force-restore known-good ortho projection before each item.
+            // This corrects content corruption even when stack depth is unchanged.
+            glMatrixMode(GL_PROJECTION);
+            glLoadMatrixf(orthoProj);
+            glMatrixMode(GL_MODELVIEW);
+            glLoadIdentity();
 
             GLint projBefore, mvBefore;
             glGetIntegerv(GL_PROJECTION_STACK_DEPTH, &projBefore);
@@ -493,9 +481,27 @@ void Nametags::RenderOverlay(ImDrawList* drawList, float screenW, float screenH)
         if (!std::isfinite(maxHealth) || maxHealth <= 0.0f)
             maxHealth = (std::max)(20.0f, health);
 
-        float absorption = 0.0f;
-        if (IsAbsorptionEnabled())
-            TryGetAbsorptionAmount(player, env, absorption);
+        std::vector<ImU32> effectColors;
+        if (IsEffectsEnabled()) {
+            static const struct { int id; ImU32 color; } kEffects[] = {
+                {  1, IM_COL32(127, 255, 255, 220) }, // Speed
+                {  5, IM_COL32(200,  30,  30, 220) }, // Strength
+                { 10, IM_COL32(230, 100, 200, 220) }, // Regeneration
+                { 11, IM_COL32(180,  80,  50, 220) }, // Resistance
+                { 12, IM_COL32(230, 150,  50, 220) }, // Fire Resistance
+                { 14, IM_COL32(200, 200, 200, 220) }, // Invisibility
+                { 19, IM_COL32( 80, 180,  40, 220) }, // Poison
+                { 22, IM_COL32(250, 210,  50, 220) }, // Absorption
+            };
+            for (const auto& pe : kEffects) {
+                jobject effect = player->GetActivePotionEffect(pe.id, env);
+                if (env->ExceptionCheck()) { env->ExceptionClear(); continue; }
+                if (effect) {
+                    effectColors.push_back(pe.color);
+                    env->DeleteLocalRef(effect);
+                }
+            }
+        }
 
         std::string formattedName = player->GetFormattedDisplayName(env);
         if (formattedName.empty()) formattedName = plainName;
@@ -529,7 +535,6 @@ void Nametags::RenderOverlay(ImDrawList* drawList, float screenW, float screenH)
         entry.name        = std::move(formattedName);
         entry.health      = health;
         entry.maxHealth   = maxHealth;
-        entry.absorption  = absorption;
         entry.distance    = distance;
         entry.width       = (std::max)(0.6f, player->GetWidth(env));
         entry.height      = (std::max)(1.8f, player->GetHeight(env));
@@ -537,6 +542,7 @@ void Nametags::RenderOverlay(ImDrawList* drawList, float screenW, float screenH)
         entry.lastPos     = player->GetLastTickPos(env);
         entry.isPlayer    = true;
         entry.equipmentRefs = std::move(equipRefs);
+        entry.effects       = std::move(effectColors);
         entries.push_back(std::move(entry));
 
         env->DeleteLocalRef(playerObject);
@@ -604,50 +610,6 @@ void Nametags::RenderOverlay(ImDrawList* drawList, float screenW, float screenH)
         return a.distance > b.distance;
     });
 
-    // ── PlayerESP wire-box GL pass (if toggle on) ─────────────────────────────
-    if (IsPlayerESPEnabled()) {
-        glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
-                     GL_LINE_BIT | GL_POLYGON_BIT | GL_TEXTURE_BIT | GL_LIGHTING_BIT);
-        glMatrixMode(GL_PROJECTION);
-        glPushMatrix();
-        glLoadMatrixf(snapshot.projection.data());
-        glMatrixMode(GL_MODELVIEW);
-        glPushMatrix();
-        glLoadMatrixf(snapshot.modelView.data());
-
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        glDisable(GL_TEXTURE_2D);
-        glDisable(GL_LIGHTING);
-        glDisable(GL_DEPTH_TEST);
-        glEnable(GL_LINE_SMOOTH);
-        glLineWidth(1.5f);
-        glColor4f(0.28f, 0.92f, 0.45f, 0.88f);
-
-        for (const auto& entry : entries) {
-            if (!entry.isPlayer) continue;
-            const double ix = entry.lastPos.x + (entry.currentPos.x - entry.lastPos.x) * partialTicks;
-            const double iy = entry.lastPos.y + (entry.currentPos.y - entry.lastPos.y) * partialTicks;
-            const double iz = entry.lastPos.z + (entry.currentPos.z - entry.lastPos.z) * partialTicks;
-            const double hw = static_cast<double>(entry.width) * 0.5;
-            BlockVisuals::DrawWireBox(ix - hw, iy, iz - hw, ix + hw, iy + entry.height, iz + hw);
-        }
-
-        glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
-        glLineWidth(1.0f);
-        glDisable(GL_LINE_SMOOTH);
-        glEnable(GL_DEPTH_TEST);
-        glEnable(GL_TEXTURE_2D);
-        glEnable(GL_LIGHTING);
-        glDisable(GL_BLEND);
-
-        glMatrixMode(GL_PROJECTION);
-        glPopMatrix();
-        glMatrixMode(GL_MODELVIEW);
-        glPopMatrix();
-        glPopAttrib();
-    }
-
     // ── ImGui nametag pass ────────────────────────────────────────────────────
     ImDrawList* bg = ImGui::GetBackgroundDrawList();
     if (!bg) bg = drawList;
@@ -673,11 +635,12 @@ void Nametags::RenderOverlay(ImDrawList* drawList, float screenW, float screenH)
             fontScale = manualScale;
 
         const float fontSize  = kBaseFontSize * fontScale;
-        const float iconSize  = 16.0f * fontScale;
-        const float iconPad   = 2.0f  * fontScale;
-        const float barW      = 3.0f  * fontScale;
-        const float barGap    = 3.0f;
-        const float iconsGap  = 4.0f  * fontScale;
+        const float iconSize   = 16.0f * fontScale;
+        const float iconPad    = 2.0f  * fontScale;
+        const float iconsGap   = 4.0f  * fontScale;
+        const float effectR    = 3.5f  * fontScale;
+        const float effectDiam = effectR * 2.0f;
+        const float effectPad  = 3.0f  * fontScale;
 
         // Name line
         std::vector<ColoredTextPart> lineParts = ParseColoredText(
@@ -688,11 +651,6 @@ void Nametags::RenderOverlay(ImDrawList* drawList, float screenW, float screenH)
             char buf[32];
             std::snprintf(buf, sizeof(buf), " %.1f", entry.health);
             lineParts.push_back({ buf, BuildHealthColor(entry.health, entry.maxHealth) });
-        }
-        if (IsAbsorptionEnabled() && entry.absorption > 0.0f) {
-            char buf[24];
-            std::snprintf(buf, sizeof(buf), " +%.1f", entry.absorption);
-            lineParts.push_back({ buf, IM_COL32(255, 214, 88, 255) });
         }
         if (IsDistanceEnabled()) {
             char buf[24];
@@ -709,18 +667,22 @@ void Nametags::RenderOverlay(ImDrawList* drawList, float screenW, float screenH)
             : 0.0f;
         const bool   showIcons = collectEquipment && numIcons > 0;
 
-        const float contentW = (std::max)(lineSize.x, iconsRowW);
+        const int    numEffects   = static_cast<int>(entry.effects.size());
+        const float  effectsRowW  = numEffects > 0
+            ? (numEffects * effectDiam + (numEffects - 1) * effectPad)
+            : 0.0f;
+        const bool showEffects = IsEffectsEnabled() && numEffects > 0;
 
         // Anchor
         const float anchorX = std::round((box.minX + box.maxX) * 0.5f);
         const float anchorY = std::round(box.minY - (2.0f + kAnchorVerticalOffset * fontScale));
 
-        // Row positions
-        const float nameTopY  = std::round(anchorY - lineSize.y);
-        const float iconsTopY = showIcons ? std::round(anchorY + iconsGap) : anchorY;
-        const float iconsBotY = showIcons ? std::round(iconsTopY + iconSize) : anchorY;
-        const float contentTopY = nameTopY;
-        const float contentBotY = iconsBotY;
+        // Row positions: name → effects dots → equipment icons
+        const float nameTopY    = std::round(anchorY - lineSize.y);
+        const float effectsTopY = showEffects ? std::round(anchorY + 2.0f * fontScale) : anchorY;
+        const float effectsBotY = showEffects ? std::round(effectsTopY + effectDiam)   : anchorY;
+        const float iconsBaseY  = showEffects ? effectsBotY : anchorY;
+        const float iconsTopY   = showIcons ? std::round(iconsBaseY + iconsGap) : iconsBaseY;
 
         const ImVec2 linePos(std::round(anchorX - lineSize.x * 0.5f), nameTopY);
 
@@ -729,34 +691,14 @@ void Nametags::RenderOverlay(ImDrawList* drawList, float screenW, float screenH)
 
         DrawColoredText(bg, tagFont, fontSize, linePos, lineParts);
 
-        // Vertical health bar (right side)
-        if (IsGraphicalHealthEnabled()) {
-            const float absorpH     = IsAbsorptionEnabled() ? entry.absorption : 0.0f;
-            const float effectiveMax = (std::max)(entry.maxHealth + absorpH, 1.0f);
-            const float totalHP      = (std::max)(0.0f, entry.health + absorpH);
-            const float ratio        = (std::max)(0.0f, (std::min)(1.0f, totalHP / effectiveMax));
-
-            const float minBarH = 8.0f * fontScale;
-            const float barLeft = std::round(anchorX + contentW * 0.5f + barGap);
-            const ImVec2 barMin(barLeft,     contentTopY);
-            const ImVec2 barMax(barLeft + barW,
-                                contentBotY > contentTopY + minBarH ? contentBotY : contentTopY + minBarH);
-            const float  barH  = barMax.y - barMin.y;
-
-            // Fill from top downward (high health = more of the bar filled)
-            const ImVec2 fillMax(barMax.x, barMin.y + barH * ratio);
-
-            bg->AddRectFilled(barMin, barMax, IM_COL32(0, 0, 0, 160), 1.5f);
-            bg->AddRectFilled(barMin, fillMax, BuildHealthColor(entry.health, entry.maxHealth), 1.5f);
-
-            if (absorpH > 0.0f && effectiveMax > 0.0f) {
-                const float baseRatio = (std::max)(0.0f, (std::min)(1.0f, entry.health / effectiveMax));
-                if (ratio > baseRatio) {
-                    bg->AddRectFilled(
-                        ImVec2(barMin.x, barMin.y + barH * baseRatio),
-                        ImVec2(barMax.x, barMin.y + barH * ratio),
-                        IM_COL32(255, 214, 88, 255), 1.5f);
-                }
+        // Effect dots row
+        if (showEffects) {
+            const float startX = std::round(anchorX - effectsRowW * 0.5f + effectR);
+            const float cy = effectsTopY + effectR;
+            for (int ei = 0; ei < numEffects; ++ei) {
+                const float cx = startX + static_cast<float>(ei) * (effectDiam + effectPad);
+                bg->AddCircleFilled(ImVec2(cx, cy), effectR + 1.0f, IM_COL32(0, 0, 0, 150));
+                bg->AddCircleFilled(ImVec2(cx, cy), effectR, entry.effects[ei]);
             }
         }
 
@@ -779,7 +721,6 @@ void Nametags::RenderOverlay(ImDrawList* drawList, float screenW, float screenH)
     // GL callback renders equipment icons on top of slot boxes
     if (!m_FrameIconDraws.empty()) {
         bg->AddCallback(ItemIconCallback, this);
-        bg->AddCallback(ImDrawCallback_ResetRenderState, nullptr);
     }
 
     if (renderedAny) MarkInUse(120);

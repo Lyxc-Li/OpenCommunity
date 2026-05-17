@@ -12,6 +12,7 @@
 class EnemyInfoList : public Module {
 public:
     MODULE_INFO(EnemyInfoList, "EnemyInfoList", "Tracks enemy clan members and sends their info to the application.", ModuleCategory::Visuals) {
+        SetHidden();
         SetImagePrefix(module_icons::enemy_info_list_icon_data, module_icons::enemy_info_list_icon_data_size);
         AddOption(ModuleOption::Button("Open in new Application", "Open in new Application"));
     }

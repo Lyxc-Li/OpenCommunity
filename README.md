@@ -96,11 +96,11 @@ Each client has its own set of obfuscated-to-readable name mappings, handled aut
 
 All available modules organized by category.
 
-**Combat** - AutoClicker, ArmorFilter, ArmorSwap, AutoGapple, NoHitDelay
+**Combat** - AutoClicker, FastPlace, NoHitDelay
 
 **Movement** - NoJumpDelay
 
-**Visuals** - ArrayList, DamageIndicator, Target, HideClans, Nametags, Notifications, NoRender
+**Visuals** - ArrayList, BedPlates, DamageIndicator, ItemChams, Nametags, Notifications, PlayerChams, PlayerESP, Search
 
 **Render** - HUD
 
@@ -126,14 +126,21 @@ All concrete module registration happens in `runtime/src/features/ModuleRegistry
 #include "combat/ArmorSwap.h"
 #include "combat/AutoGapple.h"
 #include "combat/NoHitDelay.h"
+#include "combat/FastPlace.h"
 #include "movement/NoJumpDelay.h"
 #include "visuals/ArrayList.h"
+#include "visuals/BedPlates.h"
 #include "visuals/DamageIndicator.h"
+#include "visuals/EnemyInfoList.h"
+#include "visuals/HideClans.h"
+#include "visuals/ItemChams.h"
 #include "visuals/Nametags.h"
 #include "visuals/Notifications.h"
 #include "visuals/NoRender.h"
+#include "visuals/PlayerChams.h"
+#include "visuals/PlayerESP.h"
+#include "visuals/Search.h"
 #include "visuals/Target.h"
-#include "visuals/HideClans.h"
 
 #include <memory>
 
@@ -144,14 +151,21 @@ namespace ModuleRegistry {
         modules.RegisterModule(std::make_shared<ArmorSwap>());
         modules.RegisterModule(std::make_shared<AutoGapple>());
         modules.RegisterModule(std::make_shared<NoHitDelay>());
+        modules.RegisterModule(std::make_shared<FastPlace>());
         modules.RegisterModule(std::make_shared<Target>());
         modules.RegisterModule(std::make_shared<HideClans>());
         modules.RegisterModule(std::make_shared<NoJumpDelay>());
         modules.RegisterModule(std::make_shared<ArrayList>());
+        modules.RegisterModule(std::make_shared<BedPlates>());
         modules.RegisterModule(std::make_shared<DamageIndicator>());
+        modules.RegisterModule(std::make_shared<EnemyInfoList>());
+        modules.RegisterModule(std::make_shared<ItemChams>());
         modules.RegisterModule(std::make_shared<Nametags>());
         modules.RegisterModule(std::make_shared<Notifications>());
         modules.RegisterModule(std::make_shared<NoRender>());
+        modules.RegisterModule(std::make_shared<PlayerChams>());
+        modules.RegisterModule(std::make_shared<PlayerESP>());
+        modules.RegisterModule(std::make_shared<Search>());
     }
 
     inline void RegisterAll() {
@@ -454,18 +468,30 @@ OpenCommunity/
 |       |   |   |-- ArmorFilter.h / .cpp
 |       |   |   |-- ArmorSwap.h / .cpp
 |       |   |   |-- AutoGapple.h / .cpp
+|       |   |   |-- FastPlace.h / .cpp
 |       |   |   `-- NoHitDelay.h / .cpp
 |       |   |-- movement/
 |       |   |   `-- NoJumpDelay.h / .cpp
 |       |   |-- render/
 |       |   |   `-- HUD.h / .cpp
+|       |   |-- settings/
+|       |   |   |-- CommandManager.h
+|       |   |   |-- CommandOutput.h
+|       |   |   `-- GameChatCommands.h
 |       |   `-- visuals/
 |       |       |-- ArrayList.h
+|       |       |-- BedPlates.h / .cpp
+|       |       |-- BlockVisuals.h / .cpp
 |       |       |-- DamageIndicator.h / .cpp
+|       |       |-- EnemyInfoList.h / .cpp
 |       |       |-- HideClans.h / .cpp
+|       |       |-- ItemChams.h / .cpp
 |       |       |-- Nametags.h / .cpp
 |       |       |-- Notifications.h / .cpp
 |       |       |-- NoRender.h / .cpp
+|       |       |-- PlayerChams.h / .cpp
+|       |       |-- PlayerESP.h / .cpp
+|       |       |-- Search.h / .cpp
 |       |       `-- Target.h / .cpp
 |       `-- game/
 |           |-- classes/

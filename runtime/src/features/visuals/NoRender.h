@@ -13,6 +13,7 @@
 class NoRender : public Module {
 public:
     MODULE_INFO(NoRender, "NoRender", "Controls selected entity rendering.", ModuleCategory::Visuals) {
+        SetHidden();
         SetImagePrefix(module_icons::no_render_icon_data, module_icons::no_render_icon_data_size);
         AddOption(ModuleOption::Toggle("AllEntities", true));
         AddOption(ModuleOption::Toggle("Items", true));

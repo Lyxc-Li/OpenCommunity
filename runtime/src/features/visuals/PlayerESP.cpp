@@ -1,72 +1,44 @@
 #include "pch.h"
 #include "PlayerESP.h"
 
-#include "../../core/RenderHook.h"
+#include "BlockVisuals.h"
 #include "../../game/classes/Minecraft.h"
 #include "../../game/classes/Player.h"
 #include "../../game/classes/Timer.h"
 #include "../../game/classes/World.h"
 #include "../../game/jni/GameInstance.h"
 
+#include <algorithm>
+#include <array>
+#include <cfloat>
+#include <cmath>
 #include <gl/GL.h>
 #include <vector>
 
 namespace {
-    struct RenderMatrixSnapshot {
-        std::vector<float> modelView;
-        std::vector<float> projection;
-        int viewportWidth = 0;
-        int viewportHeight = 0;
-
-        bool IsValid() const {
-            return modelView.size() == 16 &&
-                projection.size() == 16 &&
-                viewportWidth > 0 &&
-                viewportHeight > 0;
-        }
-    };
-
     struct PlayerRenderEntry {
-        jobject entity = nullptr;
-        double renderX = 0.0;
-        double renderY = 0.0;
-        double renderZ = 0.0;
+        jobject entity  = nullptr;
+        double renderX  = 0.0;
+        double renderY  = 0.0;
+        double renderZ  = 0.0;
+        float health    = 0.0f;
+        float maxHealth = 20.0f;
+        float width     = 0.6f;
+        float height    = 1.8f;
     };
 
-    RenderMatrixSnapshot CaptureRenderMatrixSnapshot() {
-        std::lock_guard<std::mutex> lock(RenderCache::mtx);
-        return {
-            RenderCache::modelView,
-            RenderCache::projection,
-            RenderCache::viewportW,
-            RenderCache::viewportH
-        };
-    }
-
-    void DrawWireBox(double minX, double minY, double minZ, double maxX, double maxY, double maxZ) {
-        glBegin(GL_LINES);
-
-        glVertex3d(minX, minY, minZ); glVertex3d(maxX, minY, minZ);
-        glVertex3d(maxX, minY, minZ); glVertex3d(maxX, minY, maxZ);
-        glVertex3d(maxX, minY, maxZ); glVertex3d(minX, minY, maxZ);
-        glVertex3d(minX, minY, maxZ); glVertex3d(minX, minY, minZ);
-
-        glVertex3d(minX, maxY, minZ); glVertex3d(maxX, maxY, minZ);
-        glVertex3d(maxX, maxY, minZ); glVertex3d(maxX, maxY, maxZ);
-        glVertex3d(maxX, maxY, maxZ); glVertex3d(minX, maxY, maxZ);
-        glVertex3d(minX, maxY, maxZ); glVertex3d(minX, maxY, minZ);
-
-        glVertex3d(minX, minY, minZ); glVertex3d(minX, maxY, minZ);
-        glVertex3d(maxX, minY, minZ); glVertex3d(maxX, maxY, minZ);
-        glVertex3d(maxX, minY, maxZ); glVertex3d(maxX, maxY, maxZ);
-        glVertex3d(minX, minY, maxZ); glVertex3d(minX, maxY, maxZ);
-
-        glEnd();
+    ImU32 GetHealthBarColor(float health, float maxHealth) {
+        float safeMax = maxHealth <= 0.0f ? 20.0f : maxHealth;
+        if (health > safeMax) safeMax = health;
+        const float ratio = safeMax > 0.0f ? health / safeMax : 0.0f;
+        if (ratio >= 0.70f) return IM_COL32(91, 214, 97, 255);
+        if (ratio >= 0.45f) return IM_COL32(255, 215, 92, 255);
+        if (ratio >= 0.20f) return IM_COL32(255, 165, 80, 255);
+        return IM_COL32(255, 82, 82, 255);
     }
 }
 
-void PlayerESP::RenderOverlay(ImDrawList* drawList, float screenW, float screenH) {
-    (void)drawList;
+void PlayerESP::RenderOverlay(ImDrawList* /*drawList*/, float screenW, float screenH) {
     (void)screenW;
     (void)screenH;
 
@@ -92,7 +64,7 @@ void PlayerESP::RenderOverlay(ImDrawList* drawList, float screenW, float screenH
         return;
     }
 
-    const RenderMatrixSnapshot snapshot = CaptureRenderMatrixSnapshot();
+    const BlockVisuals::RenderMatrixSnapshot snapshot = BlockVisuals::CaptureRenderMatrixSnapshot();
     if (!snapshot.IsValid()) {
         env->PopLocalFrame(nullptr);
         return;
@@ -110,9 +82,7 @@ void PlayerESP::RenderOverlay(ImDrawList* drawList, float screenW, float screenH
     renderEntries.reserve(players.size());
 
     for (auto* player : players) {
-        if (!player) {
-            continue;
-        }
+        if (!player) continue;
 
         jobject playerObject = reinterpret_cast<jobject>(player);
         if (env->IsSameObject(playerObject, localPlayerObject)) {
@@ -120,7 +90,8 @@ void PlayerESP::RenderOverlay(ImDrawList* drawList, float screenW, float screenH
             continue;
         }
 
-        if (player->GetHealth(env) <= 0.0f || player->HasZeroedBoundingBox(env)) {
+        const float health = player->GetHealth(env);
+        if (health <= 0.0f || player->HasZeroedBoundingBox(env)) {
             env->DeleteLocalRef(playerObject);
             continue;
         }
@@ -133,11 +104,20 @@ void PlayerESP::RenderOverlay(ImDrawList* drawList, float screenW, float screenH
             continue;
         }
 
+        float maxHealth = player->GetMaxHealth(env);
+        if (!std::isfinite(maxHealth) || maxHealth <= 0.0f) maxHealth = 20.0f;
+
+        float width  = player->GetWidth(env);
+        float height = player->GetHeight(env);
+        if (width  <= 0.05f) width  = 0.6f;
+        if (height <= 0.05f) height = 1.8f;
+
         renderEntries.push_back({
             playerObject,
-            previousPos.x + ((currentPos.x - previousPos.x) * partialTicks),
-            previousPos.y + ((currentPos.y - previousPos.y) * partialTicks),
-            previousPos.z + ((currentPos.z - previousPos.z) * partialTicks)
+            previousPos.x + (currentPos.x - previousPos.x) * partialTicks,
+            previousPos.y + (currentPos.y - previousPos.y) * partialTicks,
+            previousPos.z + (currentPos.z - previousPos.z) * partialTicks,
+            health, maxHealth, width, height
         });
     }
 
@@ -148,6 +128,7 @@ void PlayerESP::RenderOverlay(ImDrawList* drawList, float screenW, float screenH
 
     const float* color = GetColor();
 
+    // GL wire-box pass
     glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_LINE_BIT | GL_POLYGON_BIT | GL_TEXTURE_BIT | GL_LIGHTING_BIT);
     glMatrixMode(GL_PROJECTION);
     glPushMatrix();
@@ -167,29 +148,10 @@ void PlayerESP::RenderOverlay(ImDrawList* drawList, float screenW, float screenH
     glColor4f(color[0], color[1], color[2], color[3]);
 
     for (const auto& entry : renderEntries) {
-        auto* player = reinterpret_cast<Player*>(entry.entity);
-        float width = player->GetWidth(env);
-        float height = player->GetHeight(env);
-        if (env->ExceptionCheck()) {
-            env->ExceptionClear();
-            continue;
-        }
-
-        if (width <= 0.05f) {
-            width = 0.6f;
-        }
-        if (height <= 0.05f) {
-            height = 1.8f;
-        }
-
-        const double halfWidth = static_cast<double>(width) * 0.5;
-        DrawWireBox(
-            entry.renderX - halfWidth,
-            entry.renderY,
-            entry.renderZ - halfWidth,
-            entry.renderX + halfWidth,
-            entry.renderY + static_cast<double>(height),
-            entry.renderZ + halfWidth);
+        const double hw = static_cast<double>(entry.width) * 0.5;
+        BlockVisuals::DrawWireBox(
+            entry.renderX - hw, entry.renderY,               entry.renderZ - hw,
+            entry.renderX + hw, entry.renderY + entry.height, entry.renderZ + hw);
     }
 
     glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
@@ -205,6 +167,52 @@ void PlayerESP::RenderOverlay(ImDrawList* drawList, float screenW, float screenH
     glMatrixMode(GL_MODELVIEW);
     glPopMatrix();
     glPopAttrib();
+
+    // ImGui health bar pass — renders a vertical bar on the right side of each ESP box
+    if (IsHealthBarsEnabled()) {
+        ImDrawList* dl = ImGui::GetBackgroundDrawList();
+        if (dl) {
+            for (const auto& entry : renderEntries) {
+                const float hw = entry.width * 0.5f;
+                const std::array<BlockVisuals::WorldPoint, 8> corners = {{
+                    { (float)(entry.renderX - hw), (float)entry.renderY,               (float)(entry.renderZ - hw) },
+                    { (float)(entry.renderX + hw), (float)entry.renderY,               (float)(entry.renderZ - hw) },
+                    { (float)(entry.renderX + hw), (float)entry.renderY,               (float)(entry.renderZ + hw) },
+                    { (float)(entry.renderX - hw), (float)entry.renderY,               (float)(entry.renderZ + hw) },
+                    { (float)(entry.renderX - hw), (float)(entry.renderY + entry.height), (float)(entry.renderZ - hw) },
+                    { (float)(entry.renderX + hw), (float)(entry.renderY + entry.height), (float)(entry.renderZ - hw) },
+                    { (float)(entry.renderX + hw), (float)(entry.renderY + entry.height), (float)(entry.renderZ + hw) },
+                    { (float)(entry.renderX - hw), (float)(entry.renderY + entry.height), (float)(entry.renderZ + hw) }
+                }};
+
+                float minY = FLT_MAX, maxX = -FLT_MAX, maxY = -FLT_MAX;
+                int visible = 0;
+                for (const auto& c : corners) {
+                    BlockVisuals::ScreenPoint sp;
+                    if (!BlockVisuals::TryProjectPoint(c, snapshot, sp)) continue;
+                    if (sp.y < minY) minY = sp.y;
+                    if (sp.x > maxX) maxX = sp.x;
+                    if (sp.y > maxY) maxY = sp.y;
+                    ++visible;
+                }
+                if (visible == 0 || maxY <= minY) continue;
+
+                const float barW   = 3.0f;
+                const float barGap = 3.0f;
+                const float ratio  = (std::max)(0.0f, (std::min)(1.0f,
+                    entry.maxHealth > 0.0f ? entry.health / entry.maxHealth : 0.0f));
+
+                const float barLeft = maxX + barGap;
+                const ImVec2 barMin(barLeft, minY);
+                const ImVec2 barMax(barLeft + barW, maxY < minY + 8.0f ? minY + 8.0f : maxY);
+                const float  barH = barMax.y - barMin.y;
+                const ImVec2 fillMax(barMax.x, barMin.y + barH * ratio);
+
+                dl->AddRectFilled(barMin, barMax, IM_COL32(0, 0, 0, 160), 1.5f);
+                dl->AddRectFilled(barMin, fillMax, GetHealthBarColor(entry.health, entry.maxHealth), 1.5f);
+            }
+        }
+    }
 
     for (const auto& entry : renderEntries) {
         if (entry.entity) {

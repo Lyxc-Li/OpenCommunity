@@ -7,6 +7,7 @@
 class HideClans : public Module {
 public:
     MODULE_INFO(HideClans, "HideClans", "Hides allied players using the original team and clan rules.", ModuleCategory::Visuals) {
+        SetHidden();
         SetImagePrefix(module_icons::hide_clans_icon_data, module_icons::hide_clans_icon_data_size);
 
         AddOption(ModuleOption::Toggle("Show Allies", false));

@@ -13,6 +13,7 @@ public:
     MODULE_INFO(PlayerESP, "Player ESP", "Draws 3D boxes around players.", ModuleCategory::Visuals) {
         SetImagePrefix(module_icons::no_render_icon_data, module_icons::no_render_icon_data_size);
         AddOption(ModuleOption::Color("Color", 0.28f, 0.92f, 0.45f, 0.88f));
+        AddOption(ModuleOption::Toggle("Health Bars", false));
     }
 
     void SyncToConfig(void* configPtr) override {
@@ -25,6 +26,7 @@ public:
         for (size_t index = 0; index < 4; ++index) {
             config->PlayerESP.m_Color[index] = GetColor()[index];
         }
+        config->PlayerESP.m_ShowHealthBars = IsHealthBarsEnabled();
         config->Modules.m_PlayerESP = IsEnabled();
     }
 
@@ -38,6 +40,8 @@ public:
         for (size_t index = 0; index < 4; ++index) {
             m_Options[kColorOption].colorValue[index] = config->PlayerESP.m_Color[index];
         }
+        if (m_Options.size() > kHealthBarsOption)
+            m_Options[kHealthBarsOption].boolValue = config->PlayerESP.m_ShowHealthBars;
     }
 
 #ifdef _RUNTIME
@@ -45,10 +49,15 @@ public:
 #endif
 
 private:
-    static constexpr size_t kColorOption = 0;
+    static constexpr size_t kColorOption      = 0;
+    static constexpr size_t kHealthBarsOption = 1;
 
     const float* GetColor() const {
         static const float fallback[4] = { 0.28f, 0.92f, 0.45f, 0.88f };
         return m_Options.size() > kColorOption ? m_Options[kColorOption].colorValue : fallback;
+    }
+
+    bool IsHealthBarsEnabled() const {
+        return m_Options.size() > kHealthBarsOption && m_Options[kHealthBarsOption].boolValue;
     }
 };

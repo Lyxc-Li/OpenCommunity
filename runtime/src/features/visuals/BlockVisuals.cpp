@@ -481,7 +481,7 @@ bool BlockVisuals::TryProjectPoint(const WorldPoint& worldPoint, const RenderMat
         snapshot.projection);
     if (!std::isfinite(clipPoint.x) || !std::isfinite(clipPoint.y) ||
         !std::isfinite(clipPoint.z) || !std::isfinite(clipPoint.w) ||
-        std::fabs(clipPoint.w) < 0.0001f) {
+        clipPoint.w < 0.0001f) {
         return false;
     }
 

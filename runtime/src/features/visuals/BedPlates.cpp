@@ -839,7 +839,6 @@ void BedPlates::RenderOverlay(ImDrawList* drawList, float screenW, float screenH
     // ── GL callback: render block icons on top of slot boxes ─────────────────
     if (!m_FrameIconDraws.empty()) {
         bg->AddCallback(BlockIconCallback, this);
-        bg->AddCallback(ImDrawCallback_ResetRenderState, nullptr);
     }
 
     // ── Pass 2: count badges and fallback text (above icons) ─────────────────

@@ -32,6 +32,7 @@ public:
     ModuleCategory GetCategory() const { return m_Category; }
     bool IsEnabled() const { return m_Enabled; }
     bool IsBeta() const { return m_IsBeta; }
+    bool IsHidden() const { return m_Hidden; }
 
     void SetEnabled(bool enabled) {
         m_Enabled = enabled;
@@ -123,6 +124,10 @@ protected:
         m_IsBeta = isBeta;
     }
 
+    void SetHidden(bool hidden = true) {
+        m_Hidden = hidden;
+    }
+
     void MarkInUse(int holdMs = 150) {
         const long long durationMs = (holdMs < 0) ? 0 : holdMs;
         const long long target = GetUsageNowMs() + durationMs;
@@ -147,6 +152,7 @@ protected:
     unsigned int m_ImageSize = 0;
     std::string m_ImagePath;
     bool m_IsBeta = false;
+    bool m_Hidden = false;
 
 private:
     static long long GetUsageNowMs() {

@@ -19,6 +19,7 @@
 class ArmorFilter : public Module {
 public:
     MODULE_INFO(ArmorFilter, "ArmorFilter", "Drops low durability armor from your inventory.", ModuleCategory::Combat) {
+        SetHidden();
         SetImagePrefix(module_icons::armor_filter_icon_data, module_icons::armor_filter_icon_data_size);
         AddOption(ModuleOption::SliderInt("Delay", 40, 10, 500));
         AddOption(ModuleOption::SliderInt("Durability", 50, 0, 100));

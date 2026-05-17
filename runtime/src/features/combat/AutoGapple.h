@@ -17,6 +17,7 @@
 class AutoGapple : public Module {
 public:
     MODULE_INFO(AutoGapple, "AutoGapple", "Automatically eats a golden apple when regeneration is low.", ModuleCategory::Combat) {
+        SetHidden();
         SetImagePrefix(module_icons::apple_icon_data, module_icons::apple_icon_data_size);
         AddOption(ModuleOption::SliderInt("Delay", 5, 1, 28));
     }

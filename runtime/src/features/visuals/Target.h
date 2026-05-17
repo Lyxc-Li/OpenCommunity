@@ -20,6 +20,7 @@
 class Target : public Module {
 public:
     MODULE_INFO(Target, "Target", "Focuses and filters combat targets using the original loader logic.", ModuleCategory::Visuals) {
+        SetHidden();
         SetImagePrefix(module_icons::target_icon_data, module_icons::target_icon_data_size);
 
         AddOption(ModuleOption::Text("Player Name", "", 127));

@@ -88,6 +88,7 @@ private:
 
 public:
     MODULE_INFO(ArmorSwap, "ArmorSwap", "Automatically swaps damaged armor with a better set.", ModuleCategory::Combat) {
+        SetHidden();
         SetImagePrefix(module_icons::armor_swap_icon_data, module_icons::armor_swap_icon_data_size);
         AddOption(ModuleOption::SliderInt("Delay", 80, 1, 500));
         AddOption(ModuleOption::Toggle("Swap All", false));

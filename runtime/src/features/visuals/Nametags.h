@@ -19,14 +19,12 @@ public:
         AddOption(ModuleOption::Toggle("Health", true));
         AddOption(ModuleOption::Toggle("Distance", false));
         AddOption(ModuleOption::Toggle("Equipment", false));
-        AddOption(ModuleOption::Toggle("Graphical Health", true));
-        AddOption(ModuleOption::Toggle("Absorption", true));
+        AddOption(ModuleOption::Toggle("Effects", true));
         AddOption(ModuleOption::Toggle("Mobs", false));
         AddOption(ModuleOption::Toggle("Animals", false));
         AddOption(ModuleOption::Toggle("Auto Scale", true));
         AddOption(ModuleOption::SliderFloat("Scale", 1.0f, 0.5f, 2.0f));
         AddOption(ModuleOption::SliderInt("Max Distance", 64, 16, 255));
-        AddOption(ModuleOption::Toggle("Player ESP", false));
     }
 
     void SyncToConfig(void* configPtr) override {
@@ -38,14 +36,12 @@ public:
         config->NametagsVisuals.m_ShowHealth    = IsHealthEnabled();
         config->NametagsVisuals.m_ShowDistance  = IsDistanceEnabled();
         config->NametagsVisuals.m_ShowEquipment = IsEquipmentEnabled();
-        config->NametagsVisuals.m_ShowGraphicalHealth = IsGraphicalHealthEnabled();
-        config->NametagsVisuals.m_ShowAbsorption = IsAbsorptionEnabled();
+        config->NametagsVisuals.m_ShowEffects   = IsEffectsEnabled();
         config->NametagsVisuals.m_ShowMobs      = IsMobsEnabled();
         config->NametagsVisuals.m_ShowAnimals   = IsAnimalsEnabled();
         config->NametagsVisuals.m_AutoScale     = IsAutoScaleEnabled();
         config->NametagsVisuals.m_Scale         = GetScale();
         config->NametagsVisuals.m_MaxDistance   = GetMaxDistance();
-        config->NametagsVisuals.m_ShowPlayerESP = IsPlayerESPEnabled();
         config->Modules.m_Nametags              = IsEnabled();
     }
 
@@ -57,14 +53,12 @@ public:
         SetHealthEnabled(config->NametagsVisuals.m_ShowHealth);
         SetDistanceEnabled(config->NametagsVisuals.m_ShowDistance);
         SetEquipmentEnabled(config->NametagsVisuals.m_ShowEquipment);
-        SetGraphicalHealthEnabled(config->NametagsVisuals.m_ShowGraphicalHealth);
-        SetAbsorptionEnabled(config->NametagsVisuals.m_ShowAbsorption);
+        SetEffectsEnabled(config->NametagsVisuals.m_ShowEffects);
         SetMobsEnabled(config->NametagsVisuals.m_ShowMobs);
         SetAnimalsEnabled(config->NametagsVisuals.m_ShowAnimals);
         SetAutoScaleEnabled(config->NametagsVisuals.m_AutoScale);
         SetScale(config->NametagsVisuals.m_Scale);
         SetMaxDistance(config->NametagsVisuals.m_MaxDistance);
-        SetPlayerESPEnabled(config->NametagsVisuals.m_ShowPlayerESP);
     }
 
 #ifdef _RUNTIME
@@ -92,27 +86,23 @@ private:
 #endif
 
 private:
-    static constexpr size_t kHealthOption          = 0;
-    static constexpr size_t kDistanceOption        = 1;
-    static constexpr size_t kEquipmentOption       = 2;
-    static constexpr size_t kGraphicalHealthOption = 3;
-    static constexpr size_t kAbsorptionOption      = 4;
-    static constexpr size_t kMobsOption            = 5;
-    static constexpr size_t kAnimalsOption         = 6;
-    static constexpr size_t kAutoScaleOption       = 7;
-    static constexpr size_t kScaleOption           = 8;
-    static constexpr size_t kMaxDistanceOption     = 9;
-    static constexpr size_t kPlayerESPOption       = 10;
+    static constexpr size_t kHealthOption      = 0;
+    static constexpr size_t kDistanceOption    = 1;
+    static constexpr size_t kEquipmentOption   = 2;
+    static constexpr size_t kEffectsOption     = 3;
+    static constexpr size_t kMobsOption        = 4;
+    static constexpr size_t kAnimalsOption     = 5;
+    static constexpr size_t kAutoScaleOption   = 6;
+    static constexpr size_t kScaleOption       = 7;
+    static constexpr size_t kMaxDistanceOption = 8;
 
-    bool IsHealthEnabled()          const { return m_Options.size() > kHealthOption          && m_Options[kHealthOption].boolValue; }
-    bool IsDistanceEnabled()        const { return m_Options.size() > kDistanceOption        && m_Options[kDistanceOption].boolValue; }
-    bool IsEquipmentEnabled()       const { return m_Options.size() > kEquipmentOption       && m_Options[kEquipmentOption].boolValue; }
-    bool IsGraphicalHealthEnabled() const { return m_Options.size() > kGraphicalHealthOption && m_Options[kGraphicalHealthOption].boolValue; }
-    bool IsAbsorptionEnabled()      const { return m_Options.size() > kAbsorptionOption      && m_Options[kAbsorptionOption].boolValue; }
-    bool IsMobsEnabled()            const { return m_Options.size() > kMobsOption            && m_Options[kMobsOption].boolValue; }
-    bool IsAnimalsEnabled()         const { return m_Options.size() > kAnimalsOption         && m_Options[kAnimalsOption].boolValue; }
-    bool IsAutoScaleEnabled()       const { return m_Options.size() > kAutoScaleOption       && m_Options[kAutoScaleOption].boolValue; }
-    bool IsPlayerESPEnabled()       const { return m_Options.size() > kPlayerESPOption       && m_Options[kPlayerESPOption].boolValue; }
+    bool IsHealthEnabled()    const { return m_Options.size() > kHealthOption    && m_Options[kHealthOption].boolValue; }
+    bool IsDistanceEnabled()  const { return m_Options.size() > kDistanceOption  && m_Options[kDistanceOption].boolValue; }
+    bool IsEquipmentEnabled() const { return m_Options.size() > kEquipmentOption && m_Options[kEquipmentOption].boolValue; }
+    bool IsEffectsEnabled()   const { return m_Options.size() > kEffectsOption   && m_Options[kEffectsOption].boolValue; }
+    bool IsMobsEnabled()      const { return m_Options.size() > kMobsOption      && m_Options[kMobsOption].boolValue; }
+    bool IsAnimalsEnabled()   const { return m_Options.size() > kAnimalsOption   && m_Options[kAnimalsOption].boolValue; }
+    bool IsAutoScaleEnabled() const { return m_Options.size() > kAutoScaleOption && m_Options[kAutoScaleOption].boolValue; }
 
     float GetScale() const {
         return m_Options.size() > kScaleOption
@@ -126,15 +116,13 @@ private:
             : 64;
     }
 
-    void SetHealthEnabled(bool v)          { if (m_Options.size() > kHealthOption)          m_Options[kHealthOption].boolValue = v; }
-    void SetDistanceEnabled(bool v)        { if (m_Options.size() > kDistanceOption)        m_Options[kDistanceOption].boolValue = v; }
-    void SetEquipmentEnabled(bool v)       { if (m_Options.size() > kEquipmentOption)       m_Options[kEquipmentOption].boolValue = v; }
-    void SetGraphicalHealthEnabled(bool v) { if (m_Options.size() > kGraphicalHealthOption) m_Options[kGraphicalHealthOption].boolValue = v; }
-    void SetAbsorptionEnabled(bool v)      { if (m_Options.size() > kAbsorptionOption)      m_Options[kAbsorptionOption].boolValue = v; }
-    void SetMobsEnabled(bool v)            { if (m_Options.size() > kMobsOption)            m_Options[kMobsOption].boolValue = v; }
-    void SetAnimalsEnabled(bool v)         { if (m_Options.size() > kAnimalsOption)         m_Options[kAnimalsOption].boolValue = v; }
-    void SetAutoScaleEnabled(bool v)       { if (m_Options.size() > kAutoScaleOption)       m_Options[kAutoScaleOption].boolValue = v; }
-    void SetPlayerESPEnabled(bool v)       { if (m_Options.size() > kPlayerESPOption)       m_Options[kPlayerESPOption].boolValue = v; }
+    void SetHealthEnabled(bool v)    { if (m_Options.size() > kHealthOption)    m_Options[kHealthOption].boolValue = v; }
+    void SetDistanceEnabled(bool v)  { if (m_Options.size() > kDistanceOption)  m_Options[kDistanceOption].boolValue = v; }
+    void SetEquipmentEnabled(bool v) { if (m_Options.size() > kEquipmentOption) m_Options[kEquipmentOption].boolValue = v; }
+    void SetEffectsEnabled(bool v)   { if (m_Options.size() > kEffectsOption)   m_Options[kEffectsOption].boolValue = v; }
+    void SetMobsEnabled(bool v)      { if (m_Options.size() > kMobsOption)      m_Options[kMobsOption].boolValue = v; }
+    void SetAnimalsEnabled(bool v)   { if (m_Options.size() > kAnimalsOption)   m_Options[kAnimalsOption].boolValue = v; }
+    void SetAutoScaleEnabled(bool v) { if (m_Options.size() > kAutoScaleOption) m_Options[kAutoScaleOption].boolValue = v; }
 
     void SetScale(float v) {
         if (m_Options.size() > kScaleOption)
