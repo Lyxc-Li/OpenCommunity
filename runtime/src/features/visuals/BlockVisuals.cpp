@@ -35,6 +35,12 @@ namespace {
     jmethodID g_CachedGetBlockStateMethod = nullptr;
     jmethodID g_CachedGetBlockMethod = nullptr;
 
+    void ClearJniException(JNIEnv* env) {
+        if (env && env->ExceptionCheck()) {
+            env->ExceptionClear();
+        }
+    }
+
     bool TryInitBlockGetterCache(JNIEnv* env, jobject worldObject) {
         if (!env || !worldObject || !g_Game || !g_Game->IsInitialized()) {
             return false;
@@ -108,12 +114,6 @@ namespace {
         g_CachedGetBlockMethod      = getBlockMethod;
         g_BlockGetterCacheReady     = true;
         return true;
-    }
-
-    void ClearJniException(JNIEnv* env) {
-        if (env && env->ExceptionCheck()) {
-            env->ExceptionClear();
-        }
     }
 
     int GetObjectIdentityHash(JNIEnv* env, jobject object) {

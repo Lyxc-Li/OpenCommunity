@@ -34,6 +34,7 @@ private:
     void RenderCombatTab();
     void RenderMovementTab();
     void RenderVisualsTab();
+    void RenderUtilityTab();
     void RenderSettingsTab();
     void RenderClosing();
     void DrawInjectionStatusText(ImDrawList* drawList, const ImVec2& windowPos, float alpha, float offsetY, float scale, const char* headline, float elapsed, bool showCursor, const char* detailText = nullptr);
@@ -125,6 +126,7 @@ private:
     ID3D11ShaderResourceView* m_IconCombat = nullptr;
     ID3D11ShaderResourceView* m_IconMovement = nullptr;
     ID3D11ShaderResourceView* m_IconVisuals = nullptr;
+    ID3D11ShaderResourceView* m_IconUtility = nullptr;
     ID3D11ShaderResourceView* m_IconSettings = nullptr;
     ID3D11ShaderResourceView* m_GameChatTexture = nullptr;
     ID3D11ShaderResourceView* m_InfoLampTexture = nullptr;

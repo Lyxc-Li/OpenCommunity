@@ -20,6 +20,7 @@
 #include "../../../deps/imgui/images/ui/message_information_icon.h"
 #include "../../../deps/imgui/images/ui/command_refresh_icon.h"
 #include "../../../deps/imgui/images/ui/color_theme_icon.h"
+#include "../../../deps/imgui/images/modules/mouse_icon.h"
 #include "../../../deps/imgui/images/enemy_info/armor_icons.h"
 #define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_STATIC
@@ -3601,6 +3602,7 @@ void Screen::LoadIconTextures() {
     LoadTextureFromMemory(icons::sword_icon_data, icons::sword_icon_data_size, &m_IconCombat, &w, &h, true);
     LoadTextureFromMemory(icons::running_icon_data, icons::running_icon_data_size, &m_IconMovement, &w, &h, true);
     LoadTextureFromMemory(icons::eye_icon_data, icons::eye_icon_data_size, &m_IconVisuals, &w, &h, true);
+    LoadTextureFromMemory(module_icons::mouse_icon_data, module_icons::mouse_icon_data_size, &m_IconUtility, nullptr, nullptr, true);
     LoadTextureFromMemory(icons::settings_icon_data, icons::settings_icon_data_size, &m_IconSettings, &w, &h, true);
     LoadTextureFromMemory(icons::game_chat_icon_data, icons::game_chat_icon_data_size, &m_GameChatTexture, nullptr, nullptr, true);
     LoadTextureFromMemory(icons::message_information_icon_data, icons::message_information_icon_data_size, &m_InfoLampTexture, nullptr, nullptr, true);
@@ -3614,6 +3616,7 @@ void Screen::ReleaseIconTextures() {
     if (m_IconCombat) { m_IconCombat->Release(); m_IconCombat = nullptr; }
     if (m_IconMovement) { m_IconMovement->Release(); m_IconMovement = nullptr; }
     if (m_IconVisuals) { m_IconVisuals->Release(); m_IconVisuals = nullptr; }
+    if (m_IconUtility) { m_IconUtility->Release(); m_IconUtility = nullptr; }
     if (m_IconSettings) { m_IconSettings->Release(); m_IconSettings = nullptr; }
     if (m_GameChatTexture) { m_GameChatTexture->Release(); m_GameChatTexture = nullptr; }
     if (m_InfoLampTexture) { m_InfoLampTexture->Release(); m_InfoLampTexture = nullptr; }
@@ -4584,7 +4587,7 @@ void Screen::RenderHUDPreview() {
     std::vector<ModEntry> activeModules;
     std::vector<std::string> currentActiveKeys;
 
-    ModuleCategory cats[] = { ModuleCategory::Combat, ModuleCategory::Movement, ModuleCategory::Visuals, ModuleCategory::Settings };
+    ModuleCategory cats[] = { ModuleCategory::Combat, ModuleCategory::Movement, ModuleCategory::Visuals, ModuleCategory::Utility, ModuleCategory::Settings };
     for (auto cat : cats) {
         for (const auto& mod : moduleManager->GetModules(cat)) {
             if (!mod->IsEnabled() || mod->GetName() == "ArrayList") {
@@ -5383,6 +5386,11 @@ void Screen::RenderMovementTab() {
 void Screen::RenderVisualsTab() {
     const float contentW = m_Width - m_SidebarWidth - 16.0f - 16.0f;
     RenderModulesForCategory(ModuleCategory::Visuals, contentW, m_Height, m_FontBold, m_FontBody, m_Device, m_SearchQuery);
+}
+
+void Screen::RenderUtilityTab() {
+    const float contentW = m_Width - m_SidebarWidth - 16.0f - 16.0f;
+    RenderModulesForCategory(ModuleCategory::Utility, contentW, m_Height, m_FontBold, m_FontBody, m_Device, m_SearchQuery);
 }
 
 void Screen::RenderSettingsTab() {
@@ -6565,7 +6573,7 @@ void Screen::RenderMainInterfaceLayer(const char* windowName, const ImVec2& wind
         const float sidebarW = m_SidebarWidth;
         const float iconSize = 24.0f;
         const float iconPadY = 32.0f;
-        const float totalIconsH = 4 * iconSize + 3 * iconPadY;
+        const float totalIconsH = 5 * iconSize + 4 * iconPadY;
         const float sidebarCenterX = 26.0f;
         const float startY = wp.y + (m_Height - totalIconsH) * 0.5f;
 
@@ -6578,9 +6586,9 @@ void Screen::RenderMainInterfaceLayer(const char* windowName, const ImVec2& wind
         const float lineBottom = lineMid + lineH * 0.5f;
         dl->AddLine(ImVec2(lineX, lineTop), ImVec2(lineX, lineBottom), color::GetBorderU32(0.74f), 1.0f);
 
-        ID3D11ShaderResourceView* icons[4] = { m_IconCombat, m_IconMovement, m_IconVisuals, m_IconSettings };
+        ID3D11ShaderResourceView* icons[5] = { m_IconCombat, m_IconMovement, m_IconVisuals, m_IconUtility, m_IconSettings };
 
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < 5; i++) {
             float iconY = floorf(startY + i * (iconSize + iconPadY));
             float iconX = floorf(wp.x + sidebarCenterX - (iconSize * 0.5f)); 
 
@@ -6615,7 +6623,7 @@ void Screen::RenderMainInterfaceLayer(const char* windowName, const ImVec2& wind
 
             if (sidebarW > 54.0f) {
                 ImGui::PushClipRect(ImVec2(wp.x, wp.y), ImVec2(wp.x + sidebarW - 4.0f, wp.y + m_Height), true);
-                const char* tabNames[] = { "Combat", "Movement", "Visuals", "Settings" };
+                const char* tabNames[] = { "Combat", "Movement", "Visuals", "Utility", "Settings" };
                 const float t = Clamp01((sidebarW - 54.0f) / 90.0f);
                 const float textAlpha = 1.0f - powf(1.0f - t, 2.0f); 
                 const float slideX = (1.0f - t) * -8.0f; 
@@ -6647,10 +6655,10 @@ void Screen::RenderMainInterfaceLayer(const char* windowName, const ImVec2& wind
         }
 
         const float contentX = sidebarW + 16.0f;
-        const float searchH = (m_CurrentTab != 3) ? 34.0f : 0.0f;
-        const float searchGap = (m_CurrentTab != 3) ? 12.0f : 0.0f;
+        const float searchH = (m_CurrentTab != 4) ? 34.0f : 0.0f;
+        const float searchGap = (m_CurrentTab != 4) ? 12.0f : 0.0f;
 
-        if (m_CurrentTab != 3) {
+        if (m_CurrentTab != 4) {
             const float availableW = m_Width - contentX - 32.0f;
             const float searchW = (std::min)(340.0f, availableW);
             const float searchX = contentX + (availableW - searchW) * 0.5f; 
@@ -6693,7 +6701,8 @@ void Screen::RenderMainInterfaceLayer(const char* windowName, const ImVec2& wind
         case 0: RenderCombatTab(); break;
         case 1: RenderMovementTab(); break;
         case 2: RenderVisualsTab(); break;
-        case 3: RenderSettingsTab(); break;
+        case 3: RenderUtilityTab(); break;
+        case 4: RenderSettingsTab(); break;
         }
 
         ImGui::PopClipRect();

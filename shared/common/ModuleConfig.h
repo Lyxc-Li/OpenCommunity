@@ -22,7 +22,7 @@ enum class GameChatOutputMode {
 
 struct ModuleConfig {
     static constexpr std::uint32_t kMagic = 0x4746434F; // OCFG
-    static constexpr std::uint32_t kVersion = 16;
+    static constexpr std::uint32_t kVersion = 17;
 
     std::uint32_t m_Magic = kMagic;
     std::uint32_t m_Version = kVersion;
@@ -217,6 +217,17 @@ struct ModuleConfig {
         bool m_BlockEnabled[4] = { true, false, false, false };
         char m_BlockQueries[4][64] = { "minecraft:bed", "", "", "" };
     } Search;
+
+    struct KeybindEntry {
+        int m_Category = -1;
+        char m_ModuleName[32] = {};
+        int m_Keybind = 0;
+    };
+
+    struct {
+        KeybindEntry m_Entries[32] = {};
+        int m_Count = 0;
+    } Keybinds;
 
     struct {
         bool m_Enabled = false;

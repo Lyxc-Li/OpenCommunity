@@ -17,6 +17,7 @@ enum class ModuleCategory {
     Combat,
     Movement,
     Visuals,
+    Utility,
     Settings
 };
 

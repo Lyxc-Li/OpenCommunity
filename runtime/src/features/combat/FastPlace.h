@@ -10,7 +10,7 @@
 
 class FastPlace : public Module {
 public:
-    MODULE_INFO(FastPlace, "FastPlace", "Reduces the delay between placing blocks.", ModuleCategory::Combat) {
+    MODULE_INFO(FastPlace, "FastPlace", "Reduces the delay between placing blocks.", ModuleCategory::Utility) {
         SetImagePrefix(module_icons::no_hit_delay_icon_data, module_icons::no_hit_delay_icon_data_size);
         AddOption(ModuleOption::SliderInt("Delay", 1, 1, 6));
     }
